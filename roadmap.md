@@ -63,3 +63,8 @@
 - [x] Show the school logo (browser icon and link previews) on the Vercel site
 - [x] Teacher: remove all questions from a bank; paper's Given sheet read automatically and opened by students any time; passages read in full with a large reading view
 - [x] Teacher class quizzes: chosen sections only, strict fullscreen (2 warnings), teacher re-admit, release results, several at once
+- [x] Move to this new project: database, 69 students with PINs, 66 photos, papers, bot history
+- [x] Compact school-wide face grid: one light check per registration
+- [x] Vercel proxy and Telegram bot pointed at seamless-site-keeper.lovable.app
+- [ ] Redeploy the Vercel project from this repository (waiting on the user)
+- [ ] Photos for BH-12B-39, BH-12B-20, BH-12B-21 were not in the upload (IT Admin can reset them to retake)

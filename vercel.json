@@ -5,7 +5,7 @@
   "buildCommand": "mkdir -p vercel-proxy && echo ok > vercel-proxy/.keep",
   "outputDirectory": "vercel-proxy",
   "rewrites": [
-    { "source": "/", "destination": "https://project--87f19292-089f-4425-a787-b3b7119a0ea3.lovable.app/" },
-    { "source": "/:path*", "destination": "https://project--87f19292-089f-4425-a787-b3b7119a0ea3.lovable.app/:path*" }
+    { "source": "/", "destination": "https://seamless-site-keeper.lovable.app/" },
+    { "source": "/:path*", "destination": "https://seamless-site-keeper.lovable.app/:path*" }
   ]
 }
