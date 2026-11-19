@@ -1,6 +1,6 @@
 import { normalizeName, subjectsFor } from "@/lib/identity";
 import { RESULT_PIN, hashResultPin } from "@/lib/admin-rules";
-import { MENU, afterWrongPin, pinLockMinutesLeft, statusLines, resultText, escapeHtml, inAudience, type Audience } from "@/lib/telegram-bot";
+import { MENU, afterWrongPin, pinLockMinutesLeft, statusLines, resultText, escapeHtml, inAudience, PORTAL_SITE, type Audience } from "@/lib/telegram-bot";
 import type { Tables } from "@/integrations/supabase/types";
 
 const GATEWAY_URL = "https://connector-gateway.lovable.dev/telegram";
@@ -60,7 +60,7 @@ async function botSettings(): Promise<BotSettings> {
   const sb = await admin();
   const { data } = await sb.from("telegram_settings").select("*").eq("id", 1).maybeSingle();
   if (data) return data;
-  const { data: created, error } = await sb.from("telegram_settings").upsert({ id: 1 }).select("*").single();
+  const { data: created, error } = await sb.from("telegram_settings").upsert({ id: 1, portal_url: PORTAL_SITE }).select("*").single();
   if (error || !created) throw new Error("Could not load bot settings.");
   return created;
 }

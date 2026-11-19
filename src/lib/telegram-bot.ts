@@ -46,6 +46,9 @@ export function inAudience(audience: Audience, u: { blocked: boolean; student_co
 /** This school's live Lovable site (published address; the Vercel site only forwards to it). */
 export const LIVE_SITE = "https://seamless-site-keeper.lovable.app";
 
+/** The address students are given: the school's own Vercel site, which forwards to LIVE_SITE. */
+export const PORTAL_SITE = "https://bhsss-exam-portal.vercel.app";
+
 /**
  * Telegram must call a public address. The editor preview address sits behind a sign-in,
  * so it is swapped for the project's public preview address. Every other address (the Vercel
