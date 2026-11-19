@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { afterWrongPin, pinLockMinutesLeft, inAudience, webhookUrlFor, LIVE_SITE, resultText, statusLines } from "@/lib/telegram-bot";
+import { afterWrongPin, pinLockMinutesLeft, inAudience, webhookUrlFor, LIVE_SITE, PORTAL_SITE, resultText, statusLines } from "@/lib/telegram-bot";
 
 describe("Telegram bot rules", () => {
   it("pauses result checks for 15 minutes after 3 wrong passcodes", () => {
@@ -26,6 +26,10 @@ describe("Telegram bot rules", () => {
     expect(webhookUrlFor("https://burka-harbu-exams.lovable.app")).toBe(`${LIVE_SITE}/api/public/telegram/webhook`);
     // Pressing "Connect bot" on the Vercel site points Telegram straight at the live Lovable site.
     expect(webhookUrlFor("https://burka-harbu.vercel.app")).toBe(`${LIVE_SITE}/api/public/telegram/webhook`);
+  });
+  it("gives students the school's Vercel address, while the bot still reports to the live site", () => {
+    expect(PORTAL_SITE).toBe("https://bhsss-exam-portal.vercel.app");
+    expect(webhookUrlFor(PORTAL_SITE)).toBe("https://seamless-site-keeper.lovable.app/api/public/telegram/webhook");
   });
   it("shows only subject scores and the total, like the portal", () => {
     const t = resultText({ name: "Abdi", grade: "12", section: "A", stream: "Natural Science", subjects: ["Physics", "Biology"], scores: { Physics: 80 } });

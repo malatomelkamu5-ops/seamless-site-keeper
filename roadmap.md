@@ -66,5 +66,7 @@
 - [x] Move to this new project: database, 69 students with PINs, 66 photos, papers, bot history
 - [x] Compact school-wide face grid: one light check per registration
 - [x] Vercel proxy and Telegram bot pointed at seamless-site-keeper.lovable.app
+- [x] Bot token connected: bot verified, message address re-registered, portal link saved as bhsss-exam-portal.vercel.app
 - [ ] Redeploy the Vercel project from this repository (waiting on the user)
+- [ ] Vercel address still opens the OLD site (campus-identity-hub) — the deployed Vercel config must be updated from this repository
 - [ ] Photos for BH-12B-39, BH-12B-20, BH-12B-21 were not in the upload (IT Admin can reset them to retake)
