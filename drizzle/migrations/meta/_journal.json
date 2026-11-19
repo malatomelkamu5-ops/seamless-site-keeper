@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1795123444760,
+      "tag": "0000_exam_platform_full_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795123457800,
+      "tag": "0001_reset_deletes_results",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795123461554,
+      "tag": "0002_student_pin_lockout",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795123465896,
+      "tag": "0003_bank_given_sheet",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795123470523,
+      "tag": "0004_practice_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795123475274,
+      "tag": "0005_class_quizzes",
+      "breakpoints": true
+    }
+  ]
+}
