@@ -50,7 +50,7 @@ export const LIVE_SITE = "https://seamless-site-keeper.lovable.app";
 export const VERCEL_SITE = "https://bhsss-exam-portal.vercel.app";
 
 /** Default address the bot's portal buttons open (IT Admin can change it in bot settings). */
-export const PORTAL_SITE = LIVE_SITE;
+export const PORTAL_SITE = VERCEL_SITE;
 
 /**
  * Telegram must call a public address. The editor preview address sits behind a sign-in,

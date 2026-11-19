@@ -28,7 +28,7 @@ describe("Telegram bot rules", () => {
     expect(webhookUrlFor("https://burka-harbu.vercel.app")).toBe(`${LIVE_SITE}/api/public/telegram/webhook`);
   });
   it("opens the new live site from the bot until Vercel is redeployed, and the bot reports to the live site", () => {
-    expect(PORTAL_SITE).toBe("https://seamless-site-keeper.lovable.app");
+    expect(PORTAL_SITE).toBe("https://bhsss-exam-portal.vercel.app");
     expect(webhookUrlFor(VERCEL_SITE)).toBe("https://seamless-site-keeper.lovable.app/api/public/telegram/webhook");
   });
   it("shows only subject scores and the total, like the portal", () => {
