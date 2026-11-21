@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { ScanFace, Trash2, RefreshCw, Pencil, Download, LockKeyhole, Search, X, Save, Users, BookOpen, Copy, BadgeCheck, KeyRound, Upload, UserPlus, RotateCcw } from "lucide-react";
 import { Btn, Avatar } from "@/components/Shell";
 import { adminDirectory, adminDeleteStudent, adminEditName, adminEditStudent, adminSetRegistration, adminUploadRoster, adminAddRosterStudent, adminResetFace, adminDeletePerson, adminEditTeacher, adminResetResultPin, adminSetStaffVisibility } from "@/lib/students.functions";
-import { academicYear, SUBJECTS, STAFF_PAGES, RESULT_PIN, matchesClassFilter, classFilterOptions, type TeacherDetails, type StudentDetails } from "@/lib/admin-rules";
+import { academicYear, SUBJECTS, STAFF_PAGES, matchesClassFilter, classFilterOptions, type TeacherDetails, type StudentDetails } from "@/lib/admin-rules";
 import { EyeOff, Eye } from "lucide-react";
 import { adminResetStaffPassword } from "@/lib/exam.functions";
 import { matchesPerson } from "@/lib/results";
@@ -85,7 +85,7 @@ export function RegisteredStudents({ passcode, initial, onLock }: { passcode: st
   const resetPin = useServerFn(adminResetResultPin);
   const setVisibility = useServerFn(adminSetStaffVisibility);
   const [pinFor, setPinFor] = useState<Person | null>(null);
-  const [newPin, setNewPin] = useState("");
+
   const hidden = directory.hiddenStaffRoles ?? [];
   const toggleHidden = async (page: (typeof STAFF_PAGES)[number], hide: boolean) => {
     const next = hide ? [...new Set([...hidden, page])] : hidden.filter((x) => x !== page);
@@ -244,7 +244,7 @@ export function RegisteredStudents({ passcode, initial, onLock }: { passcode: st
               catch (e) { setError(e instanceof Error ? e.message : "Could not reset verification."); }
               finally { setBusy(false); }
             }}><RotateCcw className="h-4 w-4" />Reset face verification</Btn>
-            <Btn variant="ghost" disabled={busy} onClick={() => { setPinFor(picked); setNewPin(""); setError(""); setMessage(""); }}><KeyRound className="h-4 w-4" />Reset result passcode</Btn>
+            <Btn variant="ghost" disabled={busy} onClick={() => { setPinFor(picked); setError(""); setMessage(""); }}><KeyRound className="h-4 w-4" />Reset result passcode</Btn>
             <Btn variant="danger" disabled={busy} onClick={async () => {
               if (!confirm(`Clear ${picked.name}'s registration photo? Their school identity and saved marks will remain.`)) return;
               setBusy(true); setError("");
@@ -260,17 +260,15 @@ export function RegisteredStudents({ passcode, initial, onLock }: { passcode: st
     {pinFor && <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="pin-title">
       <form className="tile w-full max-w-sm space-y-4" onSubmit={async (e) => {
         e.preventDefault(); setError("");
-        if (!RESULT_PIN.test(newPin)) return setError("The passcode must be 4 to 6 numbers.");
         setBusy(true);
-        try { await resetPin({ data: { passcode, id: pinFor.id, pin: newPin } }); setMessage(`New result passcode for ${pinFor.name}: ${newPin} — give it to the student now.`); setPinFor(null); setNewPin(""); }
+        try { const r = await resetPin({ data: { passcode, id: pinFor.id } }); setMessage(`New result passcode for ${pinFor.name}: ${r.pin} — give it to the student now.`); setPinFor(null); }
         catch (e) { setError(e instanceof Error ? e.message : "Could not reset the passcode."); }
         finally { setBusy(false); }
       }}>
         <div className="flex items-center"><h2 id="pin-title" className="flex-1 text-lg font-semibold">Reset result passcode</h2><Btn type="button" variant="ghost" aria-label="Cancel passcode reset" className="px-2" disabled={busy} onClick={() => setPinFor(null)}><X className="h-4 w-4" /></Btn></div>
-        <p className="text-sm text-muted-foreground">{pinFor.name} <span className="font-mono">({pinFor.id})</span> forgot their passcode. Type a new one (4–6 numbers) and give it to them. The old passcode stops working.</p>
-        <input autoFocus aria-label="New result passcode" className="field text-center font-mono text-lg tracking-[0.4em]" inputMode="numeric" maxLength={6} placeholder="e.g. 4821" value={newPin} onChange={(e) => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 6))} required />
+        <p className="text-sm text-muted-foreground">{pinFor.name} <span className="font-mono">({pinFor.id})</span> forgot their passcode. A new 6-number passcode will be made for them automatically. The old passcode stops working.</p>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-        <Btn className="w-full" disabled={busy || newPin.length < 4}><KeyRound className="h-4 w-4" />{busy ? "Saving…" : "Save new passcode"}</Btn>
+        <Btn className="w-full" disabled={busy}><KeyRound className="h-4 w-4" />{busy ? "Creating…" : "Create new passcode"}</Btn>
       </form>
     </div>}
     {editing && <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="edit-title">

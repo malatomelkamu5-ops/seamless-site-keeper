@@ -436,11 +436,12 @@ export const adminEditStudent = createServerFn({ method: "POST" })
   });
 
 export const adminResetResultPin = createServerFn({ method: "POST" })
- .inputValidator((d: unknown) => z.object({ passcode: z.string().min(1).max(200), id: z.string().min(3).max(30), pin: z.string().regex(RESULT_PIN) }).parse(d))
+ .inputValidator((d: unknown) => z.object({ passcode: z.string().min(1).max(200), id: z.string().min(3).max(30) }).parse(d))
  .handler(async ({ data }) => {
    checkPasscode(data.passcode); const sb = await admin();
-   const { data: row, error } = await sb.from("registered_students").update({ results_pin_hash: await hashResultPin(data.id,data.pin), pin_failures: 0, pin_locked_until: null }).eq("student_code",data.id).select("id").maybeSingle();
-   if (error || !row) throw new Error("Could not reset this student's result passcode."); return { ok: true };
+   const pin = String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0]! % 900000));
+   const { data: row, error } = await sb.from("registered_students").update({ results_pin_hash: await hashResultPin(data.id,pin), pin_failures: 0, pin_locked_until: null }).eq("student_code",data.id).select("id").maybeSingle();
+   if (error || !row) throw new Error("Could not reset this student's result passcode."); return { ok: true, pin };
  });
 export const adminSetStaffVisibility = createServerFn({ method: "POST" })
  .inputValidator((d: unknown) => z.object({ passcode: z.string().min(1).max(200), hidden: z.array(z.enum(["director","it-admin","teacher"])).max(3) }).parse(d))
