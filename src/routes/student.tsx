@@ -393,22 +393,7 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
         </div>
         {err && <p className="mt-2 text-sm text-destructive">{err}</p>}
       </div>
-      {paper.paper.map((q, i) => {
-        const mine = answers[q.id]; const right = review.correct[q.id];
-        const ok = mine !== undefined && mine === right;
-        return (
-          <div key={q.id} className={`glass p-4 ${ok ? "border-accent/50" : "border-destructive/50"}`}>
-            <div className="flex items-start gap-2"><span className={`font-bold ${ok ? "text-accent" : "text-destructive"}`}>{i + 1}.</span><div className="min-w-0 flex-1"><MathText text={q.text} /></div><span className={`text-xs ${ok ? "text-accent" : "text-destructive"}`}>{ok ? "Correct" : mine === undefined ? "Not answered" : "Wrong"}</span></div>
-            <ul className="mt-2 space-y-1 text-sm">
-              {q.choices.map((c, j) => (
-                <li key={c.value} className={`rounded-lg border px-3 py-1.5 ${c.value === right ? "border-accent/60 bg-accent/10" : c.value === mine ? "border-destructive/60 bg-destructive/10" : "border-border"}`}>
-                  <span className="font-semibold">{"ABCD"[j]}.</span> <MathText text={c.label ?? ""} />{c.value === right ? " ✓" : c.value === mine ? " ✗ your answer" : ""}
-                </li>
-              ))}
-            </ul>
-          </div>
-        );
-      })}
+      <PracticeReview questions={paper.paper} answers={answers} correct={review.correct} />
     </div>
   );
   if (ended) return (
@@ -635,5 +620,42 @@ function PinForm({ mode, err, typed, setTyped, typed2, setTyped2, onSubmit }: { 
         <Btn className="w-full">{mode === "enter" ? "Unlock my results" : "Save passcode & open results"}</Btn>
       </form>
     </Panel>
+  );
+}
+
+
+/** Practice review: one question at a time with Previous / Next, a number strip, and a jump to the next mistake. */
+function PracticeReview({ questions, answers, correct }: { questions: Paper["paper"]; answers: Record<string, number>; correct: Record<string, number> }) {
+  const [i, setI] = useState(0);
+  const q = questions[i];
+  if (!q) return null;
+  const isOk = (id: string) => answers[id] !== undefined && answers[id] === correct[id];
+  const mine = answers[q.id]; const right = correct[q.id]; const ok = isOk(q.id);
+  const nextMistake = () => { for (let k = 1; k <= questions.length; k++) { const j = (i + k) % questions.length; const qq = questions[j]; if (qq && !isOk(qq.id)) { setI(j); return; } } };
+  const anyMistake = questions.some((x) => !isOk(x.id));
+  return (
+    <div className="space-y-3">
+      <div className="glass flex flex-wrap gap-1.5 p-3" aria-label="Questions">
+        {questions.map((x, j) => { const good = isOk(x.id); const skipped = answers[x.id] === undefined; return (
+          <button key={x.id} type="button" onClick={() => setI(j)} aria-label={`Question ${j + 1}: ${good ? "correct" : skipped ? "not answered" : "wrong"}`} aria-current={j === i}
+            className={`h-8 w-8 rounded-lg border text-xs font-semibold ${j === i ? "ring-2 ring-primary" : ""} ${good ? "border-accent/60 bg-accent/15 text-accent" : skipped ? "border-border text-muted-foreground" : "border-destructive/60 bg-destructive/15 text-destructive"}`}>{j + 1}</button>); })}
+      </div>
+      <div className={`glass p-4 ${ok ? "border-accent/50" : "border-destructive/50"}`}>
+        <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground"><span>Question {i + 1} of {questions.length}</span><span className={ok ? "text-accent" : "text-destructive"}>{ok ? "Correct" : mine === undefined ? "Not answered" : "Wrong"}</span></div>
+        <MathText text={q.text} />
+        <ul className="mt-3 space-y-1.5 text-sm">
+          {q.choices.map((c, j) => (
+            <li key={c.value} className={`rounded-lg border px-3 py-2 ${c.value === right ? "border-accent/60 bg-accent/10" : c.value === mine ? "border-destructive/60 bg-destructive/10" : "border-border"}`}>
+              <span className="font-semibold">{"ABCD"[j]}.</span> <MathText text={c.label ?? ""} />{c.value === right ? " ✓ correct answer" : c.value === mine ? " ✗ your answer" : ""}
+            </li>
+          ))}
+        </ul>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Btn variant="ghost" disabled={i === 0} onClick={() => setI(i - 1)}>← Previous</Btn>
+          {anyMistake && <Btn variant="ghost" onClick={nextMistake}>Next mistake</Btn>}
+          <Btn className="ml-auto" disabled={i === questions.length - 1} onClick={() => setI(i + 1)}>Next →</Btn>
+        </div>
+      </div>
+    </div>
   );
 }

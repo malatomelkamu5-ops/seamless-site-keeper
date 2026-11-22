@@ -123,7 +123,7 @@ function Console({ pass, onPass }: { pass: string; onPass: (p: string) => void }
         </Panel>
 
         <Panel title="Exam schedule & duration" icon={<CalendarDays className="h-4 w-4" />}>
-          <Schedule key={`${s.scheduledStart}-${s.scheduledClose}-${s.durationMin}`} start={s.scheduledStart} close={s.scheduledClose} duration={s.durationMin} disabled={s.examLive} onSave={(v) => act(() => update({ data: { passcode: pass, ...v } }))} />
+          <Schedule key={`${s.scheduledStart}-${s.scheduledClose}-${s.durationMin}`} start={s.scheduledStart} duration={s.durationMin} disabled={s.examLive} onSave={(v) => act(() => update({ data: { passcode: pass, ...v } }))} />
           <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-sm"><span className="flex items-center gap-2"><Timer className="h-4 w-4" />Per student</span><span className="font-mono font-semibold text-primary">{s.durationMin + s.extensionMin} min</span></div>
           <div className="mt-3 flex items-center gap-2">
             <input type="number" min={1} max={180} aria-label="Extra minutes" className="field w-20" value={extra} onChange={(e) => setExtra(Number(e.target.value))} />
@@ -437,14 +437,15 @@ function localDate(value: string | null) {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
-function Schedule({ start, close, duration, disabled, onSave }: { start: string | null; close: string | null; duration: number; disabled: boolean; onSave: (v: { scheduledStart: string; scheduledClose: string; durationMin: number }) => Promise<void> }) {
+/** Last moment a late student may still start: opening time + duration + this buffer. The Director only picks the opening time. */
+const LATE_START_BUFFER_MIN = 30;
+function Schedule({ start, duration, disabled, onSave }: { start: string | null; duration: number; disabled: boolean; onSave: (v: { scheduledStart: string; scheduledClose: string; durationMin: number }) => Promise<void> }) {
   const [opens, setOpens] = useState(localDate(start));
-  const [closes, setCloses] = useState(localDate(close));
   const [minutes, setMinutes] = useState(duration);
-  return <form className="space-y-3" onSubmit={e => { e.preventDefault(); if (opens && closes) onSave({ scheduledStart: new Date(opens).toISOString(), scheduledClose: new Date(closes).toISOString(), durationMin: minutes }); }}>
+  return <form className="space-y-3" onSubmit={e => { e.preventDefault(); if (!opens) return; const t = new Date(opens).getTime(); onSave({ scheduledStart: new Date(t).toISOString(), scheduledClose: new Date(t + (minutes + LATE_START_BUFFER_MIN) * 60000).toISOString(), durationMin: minutes }); }}>
     <label className="block text-xs text-muted-foreground">Opening date & time<input aria-label="Opening date and time" type="datetime-local" className="field mt-1" value={opens} onChange={e => setOpens(e.target.value)} disabled={disabled} required /></label>
-    <label className="block text-xs text-muted-foreground">Closing date & time<input aria-label="Closing date and time" type="datetime-local" className="field mt-1" value={closes} onChange={e => setCloses(e.target.value)} disabled={disabled} required /></label>
     <label className="block text-xs text-muted-foreground">Student duration (minutes)<input aria-label="Student duration" type="number" min={5} max={600} className="field mt-1" value={minutes} onChange={e => setMinutes(Number(e.target.value))} disabled={disabled} required /></label>
+    <p className="text-xs text-muted-foreground">Late students can still start up to {LATE_START_BUFFER_MIN} minutes after the exam time would end. With Auto-close on, the session closes once everyone has submitted.</p>
     <Btn className="w-full" disabled={disabled}>Save schedule</Btn>
   </form>;
 }
