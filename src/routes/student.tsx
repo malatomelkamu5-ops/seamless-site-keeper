@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Lock, Maximize, Flag, ChevronLeft, ChevronRight, AlertTriangle, Trophy, LogOut, ShieldCheck, UserPlus, LogIn, BadgeCheck, Copy, ClipboardList, BarChart3, WifiOff, KeyRound, LifeBuoy, Sparkles, Calculator, X } from "lucide-react";
+import { Lock, Maximize, Flag, ChevronLeft, ChevronRight, AlertTriangle, Trophy, LogOut, ShieldCheck, UserPlus, LogIn, BadgeCheck, Copy, ClipboardList, BarChart3, WifiOff, KeyRound, LifeBuoy, Sparkles, Calculator, X, ExternalLink, Smartphone } from "lucide-react";
 import { useServerFn } from "@tanstack/react-start";
 import { Shell, Panel, Btn } from "@/components/Shell";
 import { LiveCamera } from "@/components/LiveCamera";
@@ -16,6 +16,8 @@ import { studentQuizOpen, studentQuizSync } from "@/lib/quiz.functions";
 import { QUIZ_MAX_WARNINGS } from "@/lib/quiz-rules";
 import { MAX_VIOLATIONS } from "@/lib/identity";
 import { ClassQuizzes } from "@/components/ClassQuizzes";
+import { detectTelegram, openOutsideTelegram } from "@/lib/telegram-webview";
+import { APP_DOWNLOAD_PATH } from "@/lib/telegram-bot";
 import { registerStudent, loginStudent, checkRegistrationName, studentPing, studentSignOut, type PublicStudent } from "@/lib/students.functions";
 
 export const Route = createFileRoute("/student")({
@@ -47,6 +49,9 @@ function StudentPage() {
   const [resultPin, setResultPin] = useState("");
   const { data: pub } = usePublicState();
   const regClosed = !pub || !pub.registrationOpen;
+  // Exams never run inside Telegram's mini-app viewer: its fullscreen and focus behaviour would block students by mistake.
+  const [inTelegram, setInTelegram] = useState(false);
+  useEffect(() => { setInTelegram(detectTelegram()); }, []);
 
   useEffect(() => {
     const raw = sessionStorage.getItem(SESSION);
@@ -92,6 +97,7 @@ function StudentPage() {
       ) : <Register onDone={signIn} onBack={() => setGate("choose")} />)}
     </Shell>
   );
+  if (mode === "exam" && inTelegram) return <TelegramBlock onBack={() => { setMode("home"); setQuizId(null); }} />;
   if (mode === "exam") return <Exam student={student} quizId={quizId} onExit={() => { setMode("home"); setQuizId(null); }} />;
   const first = student.name.split(" ")[0];
   return (
@@ -109,6 +115,31 @@ function StudentPage() {
         <button onClick={() => setMode("results")} className={`tile tile-hover text-left ${mode === "results" ? "tile-active" : ""}`}><span className="tile-icon"><BarChart3 className="h-5 w-5" /></span><div className="mt-3 font-semibold">My results</div><div className="text-sm text-muted-foreground">Official scorecard</div></button>
       </div>
       {mode === "home" ? <><ClassQuizzes student={student} onStart={(id) => { setQuizId(id); setMode("exam"); }} /><ExamLobby stream={student.stream} onStart={() => setMode("exam")} /></> : <Results student={student} initialPin={resultPin} />}
+    </Shell>
+  );
+}
+
+/** Shown instead of the exam inside Telegram: the exam has not started, so no time or warnings are used. */
+function TelegramBlock({ onBack }: { onBack: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const link = typeof window === "undefined" ? "" : `${window.location.origin}/student`;
+  const copy = () => { navigator.clipboard?.writeText(link).then(() => setCopied(true)).catch(() => setCopied(false)); };
+  return (
+    <Shell title="Exam Security Notice" subtitle="Exams cannot be taken inside Telegram" help>
+      <div className="tile mx-auto max-w-md space-y-4 text-center">
+        <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-destructive/40 bg-destructive/10"><ShieldCheck className="h-7 w-7 text-destructive" /></span>
+        <h2 className="text-xl font-semibold">Open the exam outside Telegram</h2>
+        <p className="text-sm text-muted-foreground">Telegram's viewer can't keep the exam in fullscreen and would count normal taps as leaving the screen. Your exam has <b>not</b> started and no time is lost.</p>
+        <ol className="space-y-1 rounded-xl border border-border bg-secondary/40 p-3 text-left text-sm">
+          <li>1. Tap <b>Open in browser</b> below, or the three dots (⋮) at the top → <b>Open in Chrome</b>.</li>
+          <li>2. Or open the <b>BHSSS Exam app</b> on your phone.</li>
+          <li>3. Sign in again with your ID and passcode, then start the exam.</li>
+        </ol>
+        <Btn className="w-full" onClick={() => openOutsideTelegram(link)}><ExternalLink className="h-4 w-4" />Open in browser</Btn>
+        <Btn variant="ghost" className="w-full" onClick={copy}><Copy className="h-4 w-4" />{copied ? "Link copied — paste it in Chrome" : "Copy exam link"}</Btn>
+        <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" className="flex items-center justify-center gap-2 text-sm text-primary hover:underline"><Smartphone className="h-4 w-4" />Download the BHSSS Exam app (Android)</a>
+        <Btn variant="ghost" className="w-full" onClick={onBack}>← Back</Btn>
+      </div>
     </Shell>
   );
 }
