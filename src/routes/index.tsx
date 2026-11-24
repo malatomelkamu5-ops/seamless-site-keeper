@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Crown, Cpu, BookOpen, GraduationCap } from "lucide-react";
-import { HelpLink, visibleRoles } from "@/components/Shell";
+import { AppDownload, HelpLink, visibleRoles } from "@/components/Shell";
 import { usePublicState } from "@/lib/live";
 
 export const Route = createFileRoute("/")({
@@ -47,6 +47,7 @@ function Index() {
         ))}
       </div>
       <p className="mt-8 text-center text-muted-foreground">Choose who you are to enter the exam portal.</p>
+      <div className="mt-6"><AppDownload /></div>
       <div className="mt-6 flex justify-center"><HelpLink /></div>
     </div>
   );

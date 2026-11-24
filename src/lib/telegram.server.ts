@@ -1,6 +1,6 @@
 import { normalizeName, subjectsFor } from "@/lib/identity";
 import { RESULT_PIN, hashResultPin } from "@/lib/admin-rules";
-import { MENU, afterWrongPin, pinLockMinutesLeft, statusLines, resultText, escapeHtml, inAudience, PORTAL_SITE, type Audience } from "@/lib/telegram-bot";
+import { MENU, afterWrongPin, pinLockMinutesLeft, statusLines, resultText, escapeHtml, inAudience, PORTAL_SITE, appDownloadUrl, type Audience } from "@/lib/telegram-bot";
 import type { Tables } from "@/integrations/supabase/types";
 
 const GATEWAY_URL = "https://connector-gateway.lovable.dev/telegram";
@@ -71,6 +71,7 @@ const menuKeyboard = (s: BotSettings) => ({
     [{ text: MENU.result }, { text: MENU.profile }],
     [{ text: MENU.status }, { text: MENU.news }],
     [{ text: MENU.help }, { text: MENU.portal, web_app: { url: `${s.portal_url.replace(/\/$/, "")}/student` } }],
+    [{ text: MENU.app }],
     [{ text: MENU.signOut }],
   ],
   resize_keyboard: true, is_persistent: true,
@@ -264,6 +265,7 @@ export async function handleUpdate(update: TgUpdate) {
   if (text === MENU.profile || command === "/profile") { await setUser(chatId, { state: "menu" }); return showProfile(user, s); }
   if (text === MENU.status || command === "/status") { await setUser(chatId, { state: "menu" }); return showMenu(chatId, s, `📅 <b>Exam portal status</b>\n\n${statusOf(await portalStatus())}`); }
   if (text === MENU.news) { await setUser(chatId, { state: "menu" }); return showNews(user, s); }
+  if (text === MENU.app || command === "/app") return send(chatId, "📱 <b>BHSSS Exam app (Android)</b>\n\nTake your exams in the school app: screenshots are blocked and the phone stays on the exam until you submit.\n\n1. Tap the button below to download.\n2. Open the downloaded file and tap <b>Install</b> (allow “install from this source” the first time).\n3. Sign in with your ID and result passcode as usual.", { inline_keyboard: [[{ text: "⬇️ Download the app", url: appDownloadUrl(s.portal_url) }]] });
   if (text === MENU.portal) return send(chatId, "Tap below to open the exam portal.", portalButton(s));
   if (text === MENU.help || command === "/help") {
     await setUser(chatId, { state: "await_help" });

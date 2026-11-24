@@ -223,7 +223,8 @@ function ExamLobby({ onStart, stream }: { onStart: () => void; stream: string })
             <div className="mt-1 text-sm text-muted-foreground">{bank.subject} · {bank.count} questions · {bank.marks} marks · {st?.durationMin} minutes</div>
             {st?.scheduledStart && <div className="mt-2 text-sm text-muted-foreground">{new Date(st.scheduledStart).toLocaleString()} – {new Date(st.scheduledClose ?? st.scheduledStart).toLocaleString()}</div>}
             <ul className="mt-4 space-y-1.5 text-sm text-muted-foreground">
-              <li>• The exam opens in fullscreen. Leaving it or switching windows is reported.</li>
+              <li>• The exam opens in fullscreen. Leaving it, switching apps, split screen or floating apps are reported and hide the questions.</li>
+              <li>• Your name and ID are printed across the paper, so screenshots and photos show who took them.</li>
               <li>• More than 3 violations auto-submits your exam and blocks you.</li>
               <li>• Your question and answer order is unique to you.</li>
               <li>• The exam submits automatically when time is up.</li>
@@ -242,6 +243,9 @@ function ExamLobby({ onStart, stream }: { onStart: () => void; stream: string })
 }
 
 type Paper = Awaited<ReturnType<typeof studentExam>>;
+type ExamAppBridge = { lock: () => void; unlock: () => void };
+const examApp = () => (typeof window === "undefined" ? undefined : (window as unknown as { BHExamApp?: ExamAppBridge }).BHExamApp);
+
 function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onExit: () => void; quizId?: string | null }) {
   const loadExam = useServerFn(studentExam);
   const syncExam = useServerFn(studentSync);
@@ -277,6 +281,8 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
   const [flagNote, setFlagNote] = useState("");
   const [askSubmit, setAskSubmit] = useState(false);
   const [showGiven, setShowGiven] = useState(false);
+  // True while the exam page is not the screen in front (app switch, floating AI bubble, notification shade, split screen).
+  const [away, setAway] = useState(false);
   const [ended, setEnded] = useState<null | "submitted" | "blocked" | "timeup">(null);
   const [review, setReview] = useState<{ score: number; total: number; correct: Record<string, number> } | null>(null);
   const answersRef = useRef(answers); answersRef.current = answers;
@@ -289,6 +295,8 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
     try { localStorage.setItem(backupKey.current, JSON.stringify({ answers, idx })); } catch { /* storage full or blocked */ }
   }, [answers, idx, ended]);
   useEffect(() => { if (ended && backupKey.current) try { localStorage.removeItem(backupKey.current); } catch { /* ignore */ } }, [ended]);
+  // In the school's Android app, pin the screen for the whole exam (no home, recent apps, split screen or floating apps).
+  useEffect(() => { const app = examApp(); if (!app) return; if (ended) app.unlock(); else app.lock(); return () => app.unlock(); }, [ended]);
 
   const push = async (extra: { violation?: "fullscreen" | "focus"; submit?: boolean } = {}) => {
     if (endedRef.current || !backupKey.current) return; // nothing to save until the exam has loaded
@@ -345,14 +353,24 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
   useEffect(() => {
     let last = 0;
     const hit = (kind: "fullscreen" | "focus") => { if (endedRef.current || pausedRef.current || offlineRef.current || Date.now() - last < 1500) return; last = Date.now(); push({ violation: kind }); };
-    const blur = () => hit("focus");
-    const vis = () => document.hidden && hit("focus");
+    const blur = () => { if (!endedRef.current) setAway(true); hit("focus"); };
+    const focus = () => { if (!document.hidden) setAway(false); };
+    const vis = () => { if (document.hidden) { if (!endedRef.current) setAway(true); hit("focus"); } else if (document.hasFocus()) setAway(false); };
+    // Split screen / floating window: the page suddenly becomes much smaller without the keyboard being open.
+    const base = { w: window.innerWidth, h: window.innerHeight };
+    const typing = () => { const a = document.activeElement; return !!a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA"); };
+    const resize = () => {
+      if (typing()) return;
+      if (window.innerWidth > base.w) base.w = window.innerWidth;
+      if (window.innerHeight > base.h) base.h = window.innerHeight;
+      if (window.innerWidth < base.w * 0.75 || window.innerHeight < base.h * 0.7) hit("focus");
+    };
     const supported = fullscreenSupported();
     setFsOk(supported); setIsFs(!supported || inFullscreen());
     const fs = () => { const on = inFullscreen(); setIsFs(on); if (!on) hit("fullscreen"); };
     // Any tap while the exam runs puts the screen straight back into fullscreen (browsers only allow this from a tap).
     const back = () => { if (supported && !endedRef.current && !inFullscreen()) enterFullscreen(); };
-    window.addEventListener("blur", blur); document.addEventListener("visibilitychange", vis);
+    window.addEventListener("blur", blur); window.addEventListener("focus", focus); window.addEventListener("resize", resize); document.addEventListener("visibilitychange", vis);
     FULLSCREEN_EVENTS.forEach((n) => document.addEventListener(n, fs));
     document.addEventListener("pointerdown", back, true);
     // Block copy / select-all / print / save shortcuts while the exam runs.
@@ -360,7 +378,7 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
     document.addEventListener("keydown", keys, true);
     return () => {
       document.removeEventListener("keydown", keys, true);
-      window.removeEventListener("blur", blur); document.removeEventListener("visibilitychange", vis);
+      window.removeEventListener("blur", blur); window.removeEventListener("focus", focus); window.removeEventListener("resize", resize); document.removeEventListener("visibilitychange", vis);
       FULLSCREEN_EVENTS.forEach((n) => document.removeEventListener(n, fs));
       document.removeEventListener("pointerdown", back, true);
     };
@@ -426,6 +444,22 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
     // Questions and choices cannot be selected, copied, cut, dragged or long-pressed during the exam.
     <div className="fixed inset-0 z-50 select-none overflow-y-auto overscroll-contain bg-background [-webkit-touch-callout:none]"
       onCopy={(e) => e.preventDefault()} onCut={(e) => e.preventDefault()} onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
+      {/* The student's name and ID are stamped across the paper, so any photo or screenshot shows who took it. */}
+      <div aria-hidden className="pointer-events-none fixed inset-0 z-[35] overflow-hidden">
+        <div className="absolute -inset-1/2 flex -rotate-[28deg] flex-wrap content-start gap-x-16 gap-y-20 p-8">
+          {Array.from({ length: 120 }, (_, i) => <span key={i} className="whitespace-nowrap font-mono text-sm font-semibold text-foreground/[0.07]">{student.id} · {student.name} · {new Date().toLocaleDateString()}</span>)}
+        </div>
+      </div>
+      {/* The moment the exam is not the front screen, the questions are hidden, so a floating AI app or screenshot sees nothing. */}
+      {away && !ended && (
+        <div role="alertdialog" aria-modal="true" aria-labelledby="away-title" className="fixed inset-0 z-[70] flex items-center justify-center bg-background p-6 text-center" onPointerDown={() => setAway(false)}>
+          <div className="max-w-sm">
+            <Lock className="mx-auto h-12 w-12 text-destructive" />
+            <h2 id="away-title" className="mt-3 text-xl font-bold">Exam hidden — you left the exam screen</h2>
+            <p className="mt-2 text-sm text-muted-foreground">Leaving the exam, opening another app or a floating window is reported to the Director. Tap here to come back. Your answers and time are safe.</p>
+          </div>
+        </div>
+      )}
       <div className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-3 py-2 sm:gap-4 sm:px-4 sm:py-3">
           <img src="/school-logo.jpg" alt="" className="h-9 w-9 rounded-full" />

@@ -7,6 +7,7 @@ export const MENU = {
   news: "📢 Announcements",
   help: "🆘 Help",
   portal: "🌐 Open Portal",
+  app: "📱 Exam App",
   signOut: "🚪 Sign out",
   cancel: "⬅️ Back to menu",
 } as const;
@@ -64,6 +65,10 @@ export function webhookUrlFor(origin: string) {
   const host = m ? `project--${m[1]}-dev.${m[2]}` : new URL(LIVE_SITE).hostname;
   return `https://${host}/api/public/telegram/webhook`;
 }
+
+/** The school's Android exam app (screenshots blocked, phone pinned during exams), served by the portal itself. */
+export const APP_DOWNLOAD_PATH = "/BHSSS-Exam.apk";
+export const appDownloadUrl = (portalUrl: string) => `${portalUrl.replace(/\/$/, "")}${APP_DOWNLOAD_PATH}`;
 
 export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 

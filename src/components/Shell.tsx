@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
-import { Crown, Cpu, BookOpen, GraduationCap, MessageCircle, BadgeCheck } from "lucide-react";
+import { Crown, Cpu, BookOpen, GraduationCap, MessageCircle, BadgeCheck, Smartphone } from "lucide-react";
+import { APP_DOWNLOAD_PATH } from "@/lib/telegram-bot";
 import { usePublicState } from "@/lib/live";
 import { isPageVisible } from "@/lib/admin-rules";
 
@@ -28,6 +29,22 @@ export function useNow(ms = 1000) {
 export const SUPPORT_URL = "https://t.me/bhsss_admin";
 export function HelpLink() {
   return <a href={SUPPORT_URL} target="_blank" rel="noopener noreferrer" className="help-link"><MessageCircle className="h-4 w-4" />Need help? Contact us</a>;
+}
+
+/** Download card for the school's Android exam app; hidden when the page is already open inside that app. */
+export function AppDownload() {
+  const [inApp, setInApp] = useState(true);
+  useEffect(() => { setInApp(/BHSSSExamApp/.test(navigator.userAgent)); }, []);
+  if (inApp) return null;
+  return (
+    <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" className="tile tile-hover mx-auto flex max-w-xl items-center gap-4 text-left">
+      <span className="tile-icon shrink-0"><Smartphone className="h-5 w-5" /></span>
+      <span className="min-w-0">
+        <span className="block font-semibold">Download the BHSSS Exam app (Android)</span>
+        <span className="block text-sm text-muted-foreground">Screenshots are blocked and the phone stays on the exam until you submit. Open the file, tap Install, then sign in as usual.</span>
+      </span>
+    </a>
+  );
 }
 
 export function Shell({ children, title, subtitle, help = false }: { children: ReactNode; title: string; subtitle: string; help?: boolean }) {

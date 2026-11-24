@@ -71,3 +71,6 @@
 - [ ] Redeploy the Vercel project from this repository (waiting on the user)
 - [ ] Vercel address still opens the OLD site (campus-identity-hub) — the deployed Vercel config must be updated from this repository
 - [x] Photos for BH-12B-39, BH-12B-20, BH-12B-21 restored (all 69 students now have photos)
+- [x] Exam anti-cheating: blank screen when leaving the exam, name/ID watermark, split-screen check
+- [x] Android exam app (screenshots blocked, phone pinned during exams) with download on the home page and the bot "📱 Exam App" button
+- [ ] Publish so the app file and new bot button reach the live site (waiting on the user)

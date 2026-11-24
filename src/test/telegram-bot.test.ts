@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { afterWrongPin, pinLockMinutesLeft, inAudience, webhookUrlFor, LIVE_SITE, PORTAL_SITE, VERCEL_SITE, resultText, statusLines } from "@/lib/telegram-bot";
+import { afterWrongPin, pinLockMinutesLeft, inAudience, webhookUrlFor, LIVE_SITE, PORTAL_SITE, VERCEL_SITE, resultText, statusLines, appDownloadUrl } from "@/lib/telegram-bot";
 
 describe("Telegram bot rules", () => {
   it("pauses result checks for 15 minutes after 3 wrong passcodes", () => {
@@ -42,5 +42,11 @@ describe("Telegram bot rules", () => {
     expect(t).toContain("Registration: <b>CLOSED</b>");
     expect(t).toContain("Exam: <b>LIVE</b>");
     expect(t).toContain("Results: <b>CLOSED</b>");
+  });
+});
+
+describe("exam app download", () => {
+  it("the bot's download button points at the app file on the portal address", () => {
+    expect(appDownloadUrl("https://bhsss-exam-portal.vercel.app/")).toBe("https://bhsss-exam-portal.vercel.app/BHSSS-Exam.apk");
   });
 });
