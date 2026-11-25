@@ -16,7 +16,7 @@ import { studentQuizOpen, studentQuizSync } from "@/lib/quiz.functions";
 import { QUIZ_MAX_WARNINGS } from "@/lib/quiz-rules";
 import { MAX_VIOLATIONS } from "@/lib/identity";
 import { ClassQuizzes } from "@/components/ClassQuizzes";
-import { detectTelegram, isInstalledApp } from "@/lib/telegram-webview";
+import { detectTelegram, detectWebExamBlocked, isInstalledApp, isIosDevice } from "@/lib/telegram-webview";
 import { APP_DOWNLOAD_PATH } from "@/lib/telegram-bot";
 import { registerStudent, loginStudent, checkRegistrationName, studentPing, studentSignOut, type PublicStudent } from "@/lib/students.functions";
 
@@ -51,9 +51,11 @@ function StudentPage() {
   const regClosed = !pub || !pub.registrationOpen;
   // Exams never run inside Telegram's mini-app viewer: its fullscreen and focus behaviour would block students by mistake.
   const [inTelegram, setInTelegram] = useState(false);
+  const [webExamBlocked, setWebExamBlocked] = useState(false);
   const [iosGuide, setIosGuide] = useState(false);
   useEffect(() => {
     setInTelegram(detectTelegram());
+    setWebExamBlocked(detectWebExamBlocked());
     const p = new URLSearchParams(window.location.search);
     if (p.get("install") === "ios" && !isInstalledApp()) setIosGuide(true);
   }, []);
@@ -104,6 +106,7 @@ function StudentPage() {
     </Shell>
   );
   if (mode === "exam" && inTelegram) return <TelegramBlock onBack={() => { setMode("home"); setQuizId(null); }} />;
+  if (mode === "exam" && webExamBlocked) return <AppRequiredBlock onBack={() => { setMode("home"); setQuizId(null); }} />;
   if (mode === "exam") return <Exam student={student} quizId={quizId} onExit={() => { setMode("home"); setQuizId(null); }} />;
   const first = student.name.split(" ")[0];
   return (
@@ -144,6 +147,42 @@ function TelegramBlock({ onBack }: { onBack: () => void }) {
           <div className="flex items-center gap-1.5 font-semibold text-foreground"><Share className="h-3.5 w-3.5 text-primary" />Using an iPhone (iOS)?</div>
           <p>Close this window, tap <b>📱 Exam App → Install on iPhone (iOS)</b> in the Telegram bot, then tap <b>Share (↑) → Add to Home Screen</b> in Safari.</p>
         </div>
+        <Btn variant="ghost" className="w-full" onClick={onBack}>← Back</Btn>
+      </div>
+    </Shell>
+  );
+}
+
+/** Shown instead of the exam on mobile web browsers: phone/tablet users must take exams inside the installed BHSSS Exam app (laptops remain allowed). */
+function AppRequiredBlock({ onBack }: { onBack: () => void }) {
+  const [ios, setIos] = useState(false);
+  useEffect(() => { setIos(isIosDevice()); }, []);
+  return (
+    <Shell title="Exam App Required" subtitle="Phones must take exams inside the official BHSSS Exam app" help>
+      <div className="tile mx-auto max-w-md space-y-4 text-center">
+        <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-destructive/40 bg-destructive/10"><ShieldCheck className="h-7 w-7 text-destructive" /></span>
+        <h2 className="text-xl font-semibold">Open the BHSSS Exam app</h2>
+        <p className="text-sm text-muted-foreground">Exams cannot be taken in a phone web browser. Your exam has <b>not</b> started and no time is lost.</p>
+        {ios ? (
+          <ol className="space-y-1.5 rounded-xl border border-border bg-secondary/40 p-3 text-left text-sm">
+            <li className="flex items-center gap-1.5 font-semibold text-foreground"><Share className="h-4 w-4 text-primary" />Install on iPhone (iOS):</li>
+            <li>1. Open this page in <b>Safari</b>.</li>
+            <li>2. Tap the <b>Share</b> button (<span className="font-mono">↑</span>) at the bottom.</li>
+            <li>3. Tap <b>Add to Home Screen</b>, then tap <b>Add</b>.</li>
+            <li>4. Open the <b>BHSSS Exam</b> icon from your Home Screen and start your exam.</li>
+          </ol>
+        ) : (
+          <>
+            <ol className="space-y-1 rounded-xl border border-border bg-secondary/40 p-3 text-left text-sm">
+              <li>1. Tap <b>Download BHSSS Exam App</b> below and install it.</li>
+              <li>2. Open the <b>BHSSS Exam</b> icon on your phone.</li>
+              <li>3. Sign in with your student ID and passcode, then start your exam.</li>
+            </ol>
+            <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground glow transition hover:brightness-110">
+              <Smartphone className="h-4 w-4" />Download BHSSS Exam App
+            </a>
+          </>
+        )}
         <Btn variant="ghost" className="w-full" onClick={onBack}>← Back</Btn>
       </div>
     </Shell>

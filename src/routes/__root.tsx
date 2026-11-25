@@ -14,7 +14,7 @@ import appCss from "../styles.css?url";
 import katexCss from "katex/dist/katex.min.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { ScrollHelper } from "../components/ScrollHelper";
-import { OfflineNotice } from "../components/Shell";
+import { AppUpdateGate, OfflineNotice } from "../components/Shell";
 
 function NotFoundComponent() {
   return (
@@ -135,6 +135,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
+      <AppUpdateGate />
       <OfflineNotice />
       <ScrollHelper />
     </QueryClientProvider>

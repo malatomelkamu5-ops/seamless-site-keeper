@@ -3,15 +3,18 @@ package et.edu.burkaharbu.exam;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -86,8 +89,16 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
-        s.setUserAgentString(s.getUserAgentString() + " BHSSSExamApp/1.2");
+        s.setUserAgentString(s.getUserAgentString() + " BHSSSExamApp/1.3");
         web.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                String u = req != null && req.getUrl() != null ? req.getUrl().toString() : null;
+                if (u != null && u.toLowerCase().contains(".apk")) {
+                    openExternal(u);
+                    return true;
+                }
+                return false;
+            }
             @Override public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
                 if (req != null && req.isForMainFrame()) {
                     String failed = req.getUrl() != null ? req.getUrl().toString() : PORTAL;
@@ -97,6 +108,11 @@ public class MainActivity extends Activity {
             @SuppressWarnings("deprecation")
             @Override public void onReceivedError(WebView view, int code, String desc, String failingUrl) {
                 showOffline(failingUrl);
+            }
+        });
+        web.setDownloadListener(new DownloadListener() {
+            @Override public void onDownloadStart(String url, String ua, String cd, String mime, long len) {
+                openExternal(url);
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -138,6 +154,14 @@ public class MainActivity extends Activity {
         web.loadDataWithBaseURL(OFFLINE_BASE, OFFLINE_HTML, "text/html", "UTF-8", null);
     }
 
+    void openExternal(String url) {
+        try {
+            if (url != null && (url.startsWith("https://") || url.startsWith("http://"))) {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            }
+        } catch (Exception ignored) { }
+    }
+
     class Bridge {
         @JavascriptInterface public void lock() {
             runOnUiThread(new Runnable() { public void run() {
@@ -161,6 +185,9 @@ public class MainActivity extends Activity {
                     web.evaluateJavascript("window.__stillOffline&&window.__stillOffline()", null);
                 }
             } });
+        }
+        @JavascriptInterface public void openUrl(final String url) {
+            runOnUiThread(new Runnable() { public void run() { openExternal(url); } });
         }
     }
 

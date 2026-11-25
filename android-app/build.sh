@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 BT=${BT:-/tmp/apk/android-14}; PLATFORM=${PLATFORM:-/tmp/apk/android-34/android.jar}
-KEYSTORE=${KEYSTORE:-/mnt/documents/.lovable/android/bhsss-exam.keystore}; VERSION=${VERSION:-2}
+KEYSTORE=${KEYSTORE:-/mnt/documents/.lovable/android/bhsss-exam.keystore}; VERSION=${VERSION:-3}
 OUT=/tmp/apk/out; rm -rf "$OUT"; mkdir -p "$OUT/gen" "$OUT/obj" "$OUT/dex"
 "$BT/aapt2" compile --dir res -o "$OUT/res.zip"
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$PLATFORM" --manifest AndroidManifest.xml --java "$OUT/gen" \

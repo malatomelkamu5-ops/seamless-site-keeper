@@ -1,8 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
-import { Crown, Cpu, BookOpen, GraduationCap, MessageCircle, BadgeCheck, Smartphone, WifiOff, RefreshCw, Share } from "lucide-react";
+import { Crown, Cpu, BookOpen, GraduationCap, MessageCircle, BadgeCheck, Smartphone, WifiOff, RefreshCw, Share, Download } from "lucide-react";
 import { APP_DOWNLOAD_PATH } from "@/lib/telegram-bot";
-import { isInstalledApp, isIosDevice } from "@/lib/telegram-webview";
+import { CURRENT_APP_VERSION, detectOutdatedApp, isInstalledApp, isIosDevice } from "@/lib/telegram-webview";
 import { usePublicState } from "@/lib/live";
 import { isPageVisible } from "@/lib/admin-rules";
 
@@ -77,6 +77,49 @@ export function AppDownload() {
           <li>4. Open the <b>BHSSS Exam</b> icon from your iPhone Home Screen.</li>
         </ol>
       )}
+    </div>
+  );
+}
+
+/** Full-screen mandatory update blocker shown everywhere inside outdated Android BHSSS Exam app versions. */
+export function AppUpdateGate() {
+  const [oldVersion, setOldVersion] = useState<string | null>(null);
+  const [hasNativeOpen, setHasNativeOpen] = useState(false);
+  useEffect(() => {
+    setOldVersion(detectOutdatedApp());
+    const bridge = (window as unknown as { BHExamApp?: { openUrl?: (u: string) => void } }).BHExamApp;
+    setHasNativeOpen(typeof bridge?.openUrl === "function");
+  }, []);
+  if (!oldVersion) return null;
+  const triggerUpdate = () => {
+    const bridge = (window as unknown as { BHExamApp?: { openUrl?: (u: string) => void } }).BHExamApp;
+    if (typeof bridge?.openUrl === "function") {
+      bridge.openUrl(window.location.origin + APP_DOWNLOAD_PATH);
+      return true;
+    }
+    return false;
+  };
+  return (
+    <div role="alertdialog" aria-modal="true" aria-labelledby="app-update-title" className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 p-4 backdrop-blur-md">
+      <div className="glass max-w-sm space-y-4 p-6 text-center sm:p-8">
+        <img src="/school-logo.jpg" alt="Burka Harbu logo" className="mx-auto h-16 w-16 rounded-full ring-2 ring-primary/40 glow" />
+        <div className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+          v{oldVersion} → v{CURRENT_APP_VERSION}
+        </div>
+        <div className="space-y-1.5">
+          <h2 id="app-update-title" className="text-xl font-bold">App update required</h2>
+          <p className="text-sm text-muted-foreground">A newer version of the <b>BHSSS Exam</b> app (v{CURRENT_APP_VERSION}) is required to continue. Your sign-in and exam records stay safe.</p>
+        </div>
+        <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" onClick={(e) => { if (triggerUpdate()) e.preventDefault(); }}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground glow transition hover:brightness-110">
+          <Download className="h-4 w-4" />Update app now (v{CURRENT_APP_VERSION})
+        </a>
+        {!hasNativeOpen && (
+          <p className="rounded-xl border border-border bg-secondary/40 p-3 text-left text-xs text-muted-foreground">
+            On older app versions, if tapping the button above does not start the download, open <b>@BHSSS_EXAM_PORTAL_BOT</b> in Telegram and tap <b>📱 Exam App → Download for Android</b>. After installing v{CURRENT_APP_VERSION}, future updates install in one tap here.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
