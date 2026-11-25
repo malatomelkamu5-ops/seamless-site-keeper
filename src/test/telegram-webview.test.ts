@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isTelegramWebview } from "@/lib/telegram-webview";
+import { isTelegramWebview, isIosDevice } from "@/lib/telegram-webview";
 
 const base = { userAgent: "Mozilla/5.0 (Linux; Android 13) Chrome/120 Mobile Safari/537.36", hash: "", hasTelegramProxy: false, remembered: false };
 
@@ -10,4 +10,8 @@ describe("Telegram mini-app exam block", () => {
   it("keeps blocking after Telegram's launch data is gone", () => { expect(isTelegramWebview({ ...base, remembered: true })).toBe(true); });
   it("allows a normal Chrome browser", () => { expect(isTelegramWebview(base)).toBe(false); });
   it("allows the school's Android exam app", () => { expect(isTelegramWebview({ ...base, userAgent: base.userAgent + " BHSSSExamApp/1.0", remembered: true })).toBe(false); });
+  it("detects iPhone and iPad devices for iOS install steps", () => {
+    expect(isIosDevice("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1")).toBe(true);
+    expect(isIosDevice(base.userAgent)).toBe(false);
+  });
 });

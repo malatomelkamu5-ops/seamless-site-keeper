@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
-import { Crown, Cpu, BookOpen, GraduationCap, MessageCircle, BadgeCheck, Smartphone } from "lucide-react";
+import { Crown, Cpu, BookOpen, GraduationCap, MessageCircle, BadgeCheck, Smartphone, WifiOff, RefreshCw, Share } from "lucide-react";
 import { APP_DOWNLOAD_PATH } from "@/lib/telegram-bot";
+import { isInstalledApp, isIosDevice } from "@/lib/telegram-webview";
 import { usePublicState } from "@/lib/live";
 import { isPageVisible } from "@/lib/admin-rules";
 
@@ -31,19 +32,93 @@ export function HelpLink() {
   return <a href={SUPPORT_URL} target="_blank" rel="noopener noreferrer" className="help-link"><MessageCircle className="h-4 w-4" />Need help? Contact us</a>;
 }
 
-/** Download card for the school's Android exam app; hidden when the page is already open inside that app. */
+/** Download card for Android and home-screen install guide for iPhone; hidden when already running inside the installed app. */
 export function AppDownload() {
   const [inApp, setInApp] = useState(true);
-  useEffect(() => { setInApp(/BHSSSExamApp/.test(navigator.userAgent)); }, []);
+  const [ios, setIos] = useState(false);
+  const [showIos, setShowIos] = useState(false);
+  useEffect(() => {
+    setInApp(isInstalledApp());
+    const apple = isIosDevice();
+    setIos(apple);
+    setShowIos(apple);
+  }, []);
   if (inApp) return null;
   return (
-    <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" className="tile tile-hover mx-auto flex max-w-xl items-center gap-4 text-left">
-      <span className="tile-icon shrink-0"><Smartphone className="h-5 w-5" /></span>
-      <span className="min-w-0">
-        <span className="block font-semibold">Download the BHSSS Exam app (Android)</span>
-        <span className="block text-sm text-muted-foreground">Screenshots are blocked and the phone stays on the exam until you submit. Open the file, tap Install, then sign in as usual.</span>
-      </span>
-    </a>
+    <div className="tile mx-auto max-w-xl space-y-3 text-left">
+      <div className="flex items-start gap-3">
+        <span className="tile-icon shrink-0"><Smartphone className="h-5 w-5" /></span>
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold">Get the BHSSS Exam app</div>
+          <p className="text-sm text-muted-foreground">Take exams in full screen without accidental lockouts. On Android, screenshots are blocked and the phone stays on the exam until you submit.</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {!ios && (
+          <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110">
+            <Smartphone className="h-4 w-4" />Download for Android
+          </a>
+        )}
+        <button type="button" onClick={() => setShowIos((v) => !v)} className={`inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-secondary/40 px-4 py-2 text-sm font-semibold transition hover:bg-secondary ${ios ? "flex-1 bg-primary text-primary-foreground border-primary hover:bg-primary hover:brightness-110" : ""}`}>
+          <Share className="h-4 w-4" />iPhone (iOS) install
+        </button>
+        {ios && (
+          <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-secondary/40 px-4 py-2 text-sm font-semibold transition hover:bg-secondary">
+            <Smartphone className="h-4 w-4" />Android APK
+          </a>
+        )}
+      </div>
+      {showIos && (
+        <ol className="space-y-1 rounded-xl border border-border bg-secondary/40 p-3 text-sm text-muted-foreground">
+          <li className="font-semibold text-foreground">How to install on iPhone (iOS):</li>
+          <li>1. Open this page in <b>Safari</b>.</li>
+          <li>2. Tap the <b>Share</b> button (<span className="font-mono">↑</span>) at the bottom of Safari.</li>
+          <li>3. Scroll down, tap <b>Add to Home Screen</b>, then tap <b>Add</b>.</li>
+          <li>4. Open the <b>BHSSS Exam</b> icon from your iPhone Home Screen.</li>
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** Clean offline overlay shown across non-exam screens whenever the device loses internet connection. */
+export function OfflineNotice() {
+  const [offline, setOffline] = useState(false);
+  const [checking, setChecking] = useState(false);
+  useEffect(() => {
+    const sync = () => setOffline(!navigator.onLine);
+    sync();
+    window.addEventListener("offline", sync);
+    window.addEventListener("online", sync);
+    return () => { window.removeEventListener("offline", sync); window.removeEventListener("online", sync); };
+  }, []);
+  if (!offline) return null;
+  const retry = async () => {
+    setChecking(true);
+    try {
+      const res = await fetch("/favicon.png", { method: "HEAD", cache: "no-store" });
+      if (res.ok) { setOffline(false); window.location.reload(); return; }
+    } catch { /* still offline */ }
+    finally { setChecking(false); }
+  };
+  return (
+    <div role="alertdialog" aria-modal="true" aria-labelledby="global-offline-title" className="fixed inset-0 z-30 flex items-center justify-center bg-background/95 p-4 backdrop-blur-md">
+      <div className="glass max-w-sm space-y-4 p-6 text-center sm:p-8">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-warning/40 bg-warning/10">
+          <WifiOff className="h-8 w-8 text-warning" />
+        </div>
+        <div className="space-y-1.5">
+          <h2 id="global-offline-title" className="text-xl font-bold">No internet connection</h2>
+          <p className="text-sm text-muted-foreground">You are currently offline. Turn on Wi-Fi or mobile data, then tap Try again to continue.</p>
+        </div>
+        <div className="rounded-xl border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+          Burka Harbu Special Secondary School · BHSSS Exam
+        </div>
+        <Btn className="w-full" onClick={retry} disabled={checking}>
+          <RefreshCw className={`h-4 w-4 ${checking ? "animate-spin" : ""}`} />{checking ? "Checking connection…" : "Try again"}
+        </Btn>
+      </div>
+    </div>
   );
 }
 

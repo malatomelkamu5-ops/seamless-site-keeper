@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Lock, Maximize, Flag, ChevronLeft, ChevronRight, AlertTriangle, Trophy, LogOut, ShieldCheck, UserPlus, LogIn, BadgeCheck, Copy, ClipboardList, BarChart3, WifiOff, KeyRound, LifeBuoy, Sparkles, Calculator, X, Smartphone } from "lucide-react";
+import { Lock, Maximize, Flag, ChevronLeft, ChevronRight, AlertTriangle, Trophy, LogOut, ShieldCheck, UserPlus, LogIn, BadgeCheck, Copy, ClipboardList, BarChart3, WifiOff, KeyRound, LifeBuoy, Sparkles, Calculator, X, Smartphone, RefreshCw, Share } from "lucide-react";
 import { useServerFn } from "@tanstack/react-start";
 import { Shell, Panel, Btn } from "@/components/Shell";
 import { LiveCamera } from "@/components/LiveCamera";
@@ -16,7 +16,7 @@ import { studentQuizOpen, studentQuizSync } from "@/lib/quiz.functions";
 import { QUIZ_MAX_WARNINGS } from "@/lib/quiz-rules";
 import { MAX_VIOLATIONS } from "@/lib/identity";
 import { ClassQuizzes } from "@/components/ClassQuizzes";
-import { detectTelegram } from "@/lib/telegram-webview";
+import { detectTelegram, isInstalledApp } from "@/lib/telegram-webview";
 import { APP_DOWNLOAD_PATH } from "@/lib/telegram-bot";
 import { registerStudent, loginStudent, checkRegistrationName, studentPing, studentSignOut, type PublicStudent } from "@/lib/students.functions";
 
@@ -51,7 +51,12 @@ function StudentPage() {
   const regClosed = !pub || !pub.registrationOpen;
   // Exams never run inside Telegram's mini-app viewer: its fullscreen and focus behaviour would block students by mistake.
   const [inTelegram, setInTelegram] = useState(false);
-  useEffect(() => { setInTelegram(detectTelegram()); }, []);
+  const [iosGuide, setIosGuide] = useState(false);
+  useEffect(() => {
+    setInTelegram(detectTelegram());
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("install") === "ios" && !isInstalledApp()) setIosGuide(true);
+  }, []);
 
   useEffect(() => {
     const raw = sessionStorage.getItem(SESSION);
@@ -78,6 +83,7 @@ function StudentPage() {
 
   if (!student) return (
     <Shell title="Student Portal" subtitle="Register once with a live photo, then sign in with your student ID and passcode" help>
+      {iosGuide && <IosInstallCard onClose={() => setIosGuide(false)} />}
       {notice && <p role="alert" className="mx-auto mb-4 max-w-xl rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-center text-sm text-destructive">{notice}</p>}
       {gate === "choose" && (
         <div className="mx-auto grid max-w-xl grid-cols-2 gap-4">
@@ -102,6 +108,7 @@ function StudentPage() {
   const first = student.name.split(" ")[0];
   return (
     <Shell title="Student Portal" subtitle="Burka Harbu Special Secondary School · Exam Portal" help>
+      {iosGuide && <IosInstallCard onClose={() => setIosGuide(false)} />}
       <div className="tile mb-4 flex flex-wrap items-center gap-3 sm:mb-6 sm:gap-5">
         {student.photoUrl ? <img src={student.photoUrl} alt={student.name} className="h-16 w-16 shrink-0 rounded-2xl object-cover ring-2 ring-primary/50 glow sm:h-24 sm:w-24" /> : <div className="tile-icon h-16 w-16 sm:h-24 sm:w-24" />}
         <div className="min-w-[10rem] flex-1">
@@ -132,10 +139,38 @@ function TelegramBlock({ onBack }: { onBack: () => void }) {
           <li>2. Open the <b>BHSSS Exam app</b> on your phone. Don't have it? Download it below.</li>
           <li>3. Sign in with your ID and passcode, then start the exam.</li>
         </ol>
-        <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground"><Smartphone className="h-4 w-4" />Download the BHSSS Exam app (Android)</a>
+        <a href={APP_DOWNLOAD_PATH} download="BHSSS-Exam.apk" className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground"><Smartphone className="h-4 w-4" />Download for Android</a>
+        <div className="rounded-xl border border-border bg-secondary/40 p-3 text-left text-xs text-muted-foreground space-y-1">
+          <div className="flex items-center gap-1.5 font-semibold text-foreground"><Share className="h-3.5 w-3.5 text-primary" />Using an iPhone (iOS)?</div>
+          <p>Close this window, tap <b>📱 Exam App → Install on iPhone (iOS)</b> in the Telegram bot, then tap <b>Share (↑) → Add to Home Screen</b> in Safari.</p>
+        </div>
         <Btn variant="ghost" className="w-full" onClick={onBack}>← Back</Btn>
       </div>
     </Shell>
+  );
+}
+
+/** Guided Safari Add-to-Home-Screen card shown when iPhone students open the bot's iOS install button. */
+function IosInstallCard({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="tile mx-auto mb-5 max-w-xl space-y-3 border-primary/40 text-left">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <span className="tile-icon shrink-0"><Share className="h-5 w-5" /></span>
+          <div>
+            <h2 className="font-semibold">Install BHSSS Exam on your iPhone</h2>
+            <p className="text-xs text-muted-foreground">Adds the full-screen school app icon directly to your Home Screen.</p>
+          </div>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Dismiss install guide" className="rounded-lg p-1 text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+      </div>
+      <ol className="space-y-1.5 rounded-xl border border-border bg-secondary/40 p-3 text-sm">
+        <li>1. Make sure you are viewing this page in <b>Safari</b>.</li>
+        <li>2. Tap the <b>Share</b> button (<span className="font-mono">↑</span>) at the bottom of Safari.</li>
+        <li>3. Tap <b>Add to Home Screen</b>, then tap <b>Add</b>.</li>
+        <li>4. Close Safari and open the new <b>BHSSS Exam</b> icon on your Home Screen.</li>
+      </ol>
+    </div>
   );
 }
 
@@ -511,12 +546,15 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
         </div>
       )}
       {offline && !paused && (
-        <div role="alertdialog" aria-modal="true" aria-labelledby="offline-title" className="fixed inset-0 z-40 flex items-center justify-center bg-background/90 p-4 backdrop-blur-sm">
-          <div className="glass max-w-sm p-6 text-center sm:p-8">
-            <WifiOff className="mx-auto h-10 w-10 text-warning" />
-            <h2 id="offline-title" className="mt-3 text-xl font-bold">No connection</h2>
-            <p className="mt-2 text-sm text-muted-foreground">Your timer is stopped and your exam is not submitted. Your answers, your place (question {idx + 1}) and your time ({fmt(left)}) are saved on this device. When the internet returns, the Director will let you continue.</p>
-            <p className="mt-3 animate-pulse text-xs text-warning">Reconnecting…</p>
+        <div role="alertdialog" aria-modal="true" aria-labelledby="offline-title" className="fixed inset-0 z-40 flex items-center justify-center bg-background/95 p-4 backdrop-blur-md">
+          <div className="glass max-w-sm space-y-3 p-6 text-center sm:p-8">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-warning/40 bg-warning/10">
+              <WifiOff className="h-8 w-8 text-warning" />
+            </div>
+            <h2 id="offline-title" className="text-xl font-bold">No internet connection</h2>
+            <p className="text-sm text-muted-foreground">Your timer is stopped and your exam is safe. Your answers, question {idx + 1}, and time ({fmt(left)}) are saved on this device.</p>
+            <p className="animate-pulse text-xs text-warning">Waiting for Wi-Fi or mobile data…</p>
+            <Btn className="w-full" onClick={() => push()}><RefreshCw className="h-4 w-4" />Try reconnecting</Btn>
           </div>
         </div>
       )}

@@ -14,6 +14,7 @@ import appCss from "../styles.css?url";
 import katexCss from "katex/dist/katex.min.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { ScrollHelper } from "../components/ScrollHelper";
+import { OfflineNotice } from "../components/Shell";
 
 function NotFoundComponent() {
   return (
@@ -80,6 +81,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "theme-color", content: "#0c1222" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
+      { name: "apple-mobile-web-app-title", content: "BHSSS Exam" },
+      { name: "mobile-web-app-capable", content: "yes" },
       { title: "Burka Harbu Exam Platform" },
       { name: "description", content: "Grade 12 mock exams for Burka Harbu Special Secondary School." },
       { property: "og:title", content: "Burka Harbu Exam Platform" },
@@ -99,6 +105,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "icon", href: "/favicon.png", type: "image/png" },
       { rel: "shortcut icon", href: "/favicon.ico" },
       { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
+      { rel: "manifest", href: "/manifest.webmanifest" },
     ],
   }),
   shellComponent: RootShell,
@@ -128,6 +135,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
+      <OfflineNotice />
       <ScrollHelper />
     </QueryClientProvider>
   );

@@ -1,6 +1,6 @@
 import { normalizeName, subjectsFor } from "@/lib/identity";
 import { RESULT_PIN, hashResultPin } from "@/lib/admin-rules";
-import { MENU, afterWrongPin, pinLockMinutesLeft, statusLines, resultText, escapeHtml, inAudience, PORTAL_SITE, appDownloadUrl, type Audience } from "@/lib/telegram-bot";
+import { MENU, afterWrongPin, pinLockMinutesLeft, statusLines, resultText, escapeHtml, inAudience, PORTAL_SITE, appDownloadUrl, iosAppUrl, appInstallMessage, examLiveMessage, type Audience } from "@/lib/telegram-bot";
 import type { Tables } from "@/integrations/supabase/types";
 
 const GATEWAY_URL = "https://connector-gateway.lovable.dev/telegram";
@@ -66,6 +66,12 @@ async function botSettings(): Promise<BotSettings> {
 }
 
 const portalButton = (s: BotSettings, text = "🌐 Open Exam Portal", path = "/student") => ({ inline_keyboard: [[{ text, web_app: { url: `${s.portal_url.replace(/\/$/, "")}${path}` } }]] });
+const appButtons = (s: BotSettings) => ({
+  inline_keyboard: [
+    [{ text: "⬇️ Download for Android", url: appDownloadUrl(s.portal_url) }],
+    [{ text: "🍎 Install on iPhone (iOS)", url: iosAppUrl(s.portal_url) }],
+  ],
+});
 const menuKeyboard = (s: BotSettings) => ({
   keyboard: [
     [{ text: MENU.result }, { text: MENU.profile }],
@@ -263,9 +269,14 @@ export async function handleUpdate(update: TgUpdate) {
   if (text === MENU.cancel || command === "/menu") { await setUser(chatId, { state: "menu" }); return showMenu(chatId, s); }
   if (text === MENU.result || command === "/result") return startResult(user, s);
   if (text === MENU.profile || command === "/profile") { await setUser(chatId, { state: "menu" }); return showProfile(user, s); }
-  if (text === MENU.status || command === "/status") { await setUser(chatId, { state: "menu" }); return showMenu(chatId, s, `📅 <b>Exam portal status</b>\n\n${statusOf(await portalStatus())}`); }
+  if (text === MENU.status || command === "/status") {
+    await setUser(chatId, { state: "menu" });
+    const st = await portalStatus();
+    const note = st.s.exam_live ? "\n\n📱 Open the <b>BHSSS Exam app</b> on your phone to take the live exam." : "";
+    return showMenu(chatId, s, `📅 <b>Exam portal status</b>\n\n${statusOf(st)}${note}`);
+  }
   if (text === MENU.news) { await setUser(chatId, { state: "menu" }); return showNews(user, s); }
-  if (text === MENU.app || command === "/app") return send(chatId, "📱 <b>BHSSS Exam app (Android)</b>\n\nTake your exams in the school app: screenshots are blocked and the phone stays on the exam until you submit.\n\n1. Tap the button below to download.\n2. Open the downloaded file and tap <b>Install</b> (allow “install from this source” the first time).\n3. Sign in with your ID and result passcode as usual.", { inline_keyboard: [[{ text: "⬇️ Download the app", url: appDownloadUrl(s.portal_url) }]] });
+  if (text === MENU.app || command === "/app") return send(chatId, appInstallMessage(), appButtons(s));
   if (text === MENU.portal) return send(chatId, "Tap below to open the exam portal.", portalButton(s));
   if (text === MENU.help || command === "/help") {
     await setUser(chatId, { state: "await_help" });
@@ -329,7 +340,7 @@ export async function notifyStatusChanges() {
     if (flag === "exam_live" && ts.notify_exam_live) {
       const st = await portalStatus();
       const papers = st.papers.map((p) => `${p.subject}${p.stream ? ` (${p.stream})` : ""}`).join(", ");
-      await broadcast("all", `🟢 <b>The exam is LIVE now!</b>${papers ? `\n${escapeHtml(papers)}` : ""}\n\nOpen the portal and sign in to start. Good luck!`, portalButton(ts, "🖊 Open the exam"), "auto", "Exam is live");
+      await broadcast("all", examLiveMessage(papers), appButtons(ts), "auto", "Exam is live");
     }
     if (flag === "results_published" && ts.notify_results) {
       await broadcast("registered", "📊 <b>Results are published!</b>\nTap <b>My Result</b> in the menu and enter your ID and passcode to see your marks.", menuKeyboard(ts), "auto", "Results published");

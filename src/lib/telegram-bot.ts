@@ -69,6 +69,31 @@ export function webhookUrlFor(origin: string) {
 /** The school's Android exam app (screenshots blocked, phone pinned during exams), served by the portal itself. */
 export const APP_DOWNLOAD_PATH = "/BHSSS-Exam.apk";
 export const appDownloadUrl = (portalUrl: string) => `${portalUrl.replace(/\/$/, "")}${APP_DOWNLOAD_PATH}`;
+export const iosAppUrl = (portalUrl: string) => `${portalUrl.replace(/\/$/, "")}/student?install=ios`;
+
+/** Text sent when students ask for the exam app (Android + iPhone, never directing to Chrome). */
+export function appInstallMessage() {
+  return [
+    "📱 <b>BHSSS Exam app</b>",
+    "",
+    "Take your exams in the school app: fullscreen security stays active and Android blocks screenshots until you submit.",
+    "",
+    "<b>Android phones:</b>",
+    "1. Tap <b>Download for Android</b> below.",
+    "2. Open the file and tap <b>Install</b> (allow “install from this source” the first time).",
+    "3. Open the app and sign in with your ID and passcode.",
+    "",
+    "<b>iPhone (iOS):</b>",
+    "1. Tap <b>Install on iPhone</b> below (opens in Safari).",
+    "2. Tap the <b>Share</b> button (↑) at the bottom of Safari.",
+    "3. Tap <b>Add to Home Screen</b> → <b>Add</b>, then open the <b>BHSSS Exam</b> app icon.",
+  ].join("\n");
+}
+
+/** Automatic broadcast sent when an exam goes live: directs students strictly to the BHSSS Exam app. */
+export function examLiveMessage(papers: string) {
+  return `🟢 <b>The exam is LIVE now!</b>${papers ? `\n${escapeHtml(papers)}` : ""}\n\nOpen the <b>BHSSS Exam app</b> on your phone and sign in to start. Don't have the app yet? Tap below to install it on Android or iPhone. Good luck!`;
+}
 
 export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 

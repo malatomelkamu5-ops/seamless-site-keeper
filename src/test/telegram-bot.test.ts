@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { afterWrongPin, pinLockMinutesLeft, inAudience, webhookUrlFor, LIVE_SITE, PORTAL_SITE, VERCEL_SITE, resultText, statusLines, appDownloadUrl } from "@/lib/telegram-bot";
+import { afterWrongPin, pinLockMinutesLeft, inAudience, webhookUrlFor, LIVE_SITE, PORTAL_SITE, VERCEL_SITE, resultText, statusLines, appDownloadUrl, iosAppUrl, appInstallMessage, examLiveMessage } from "@/lib/telegram-bot";
 
 describe("Telegram bot rules", () => {
   it("pauses result checks for 15 minutes after 3 wrong passcodes", () => {
@@ -48,5 +48,18 @@ describe("Telegram bot rules", () => {
 describe("exam app download", () => {
   it("the bot's download button points at the app file on the portal address", () => {
     expect(appDownloadUrl("https://bhsss-exam-portal.vercel.app/")).toBe("https://bhsss-exam-portal.vercel.app/BHSSS-Exam.apk");
+  });
+  it("provides the iPhone install link on the student page", () => {
+    expect(iosAppUrl("https://bhsss-exam-portal.vercel.app/")).toBe("https://bhsss-exam-portal.vercel.app/student?install=ios");
+  });
+  it("live exam and app messages direct students to the BHSSS Exam app for Android and iPhone without mentioning Chrome", () => {
+    const live = examLiveMessage("Mathematics (Natural Science)");
+    expect(live).toContain("BHSSS Exam app");
+    expect(live.toLowerCase()).not.toContain("chrome");
+    const install = appInstallMessage();
+    expect(install).toContain("Android");
+    expect(install).toContain("iPhone");
+    expect(install).toContain("Add to Home Screen");
+    expect(install.toLowerCase()).not.toContain("chrome");
   });
 });
