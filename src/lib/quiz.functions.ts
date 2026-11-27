@@ -4,7 +4,7 @@ import { teacherStream } from "@/lib/admin-rules";
 import { readmitDeadline, remainingSeconds } from "@/lib/exam-timing";
 import { shuffle } from "@/lib/identity";
 import { groupByPassage } from "@/lib/paper";
-import { canTakeQuiz, classLabel, quizScore, quizShouldBlock, QUIZ_MAX_MINUTES, QUIZ_MIN_MINUTES, QUIZ_MAX_QUESTIONS } from "@/lib/quiz-rules";
+import { canTakeQuiz, classLabel, quizScore, quizShouldBlock, QUIZ_MAX_MINUTES, QUIZ_MIN_MINUTES, QUIZ_MAX_QUESTIONS, QUIZ_ENTRY_SECONDS, quizEntryState } from "@/lib/quiz-rules";
 import { teacher, student, figureLinks, type Question } from "@/lib/exam.functions";
 
 async function admin() {
@@ -15,7 +15,7 @@ const now = () => new Date().toISOString();
 const pass = z.string().min(1).max(200);
 const tid = z.string().max(30);
 const who = z.object({ name: z.string().min(1).max(100), id: z.string().min(3).max(30), token: z.string().uuid() });
-type Quiz = { id: string; teacher_id: string; subject: string; title: string; stream: string; sections: string[]; duration_sec: number; questions: unknown; given: string | null; status: string; results_released: boolean; created_at: string; closed_at: string | null };
+type Quiz = { id: string; teacher_id: string; subject: string; title: string; stream: string; sections: string[]; duration_sec: number; questions: unknown; given: string | null; status: string; results_released: boolean; created_at: string; closed_at: string | null; entry_window_sec: number | null };
 const qs = (q: Quiz) => q.questions as Question[];
 
 /** Marks and closes every running attempt whose time is up (or whose quiz was closed). */
@@ -25,7 +25,8 @@ async function settle(quizzes: Quiz[]) {
   const byId = new Map(quizzes.map((q) => [q.id, q]));
   const { data } = await sb.from("quiz_attempts").select("*").in("quiz_id", [...byId.keys()]).eq("status", "in_progress");
   for (const a of data ?? []) {
-    const q = byId.get(a.quiz_id)!;
+    const q = byId.get(a.quiz_id);
+    if (!q) continue;
     if (q.status === "live" && remainingSeconds(a.deadline_at) > 0) continue;
     const { score, total } = quizScore(qs(q), a.answers as Record<string, number>);
     await sb.from("quiz_attempts").update({ status: "submitted", score, total, submitted_at: now() }).eq("id", a.id).eq("status", "in_progress");
@@ -46,14 +47,17 @@ export const teacherQuizzes = createServerFn({ method: "POST" })
     const list = (quizzes ?? []) as Quiz[];
     await settle(list.filter((q) => q.status === "live"));
     const { data: attempts } = list.length ? await sb.from("quiz_attempts").select("*").in("quiz_id", list.map((q) => q.id)) : { data: [] };
-    const codes = [...new Set((attempts ?? []).map((a) => a.student_code))];
-    const { data: people } = codes.length ? await sb.from("registered_students").select("student_code,full_name,grade,section").in("student_code", codes) : { data: [] };
+    const { data: people } = await sb.from("registered_students").select("student_code,full_name,grade,section,stream").eq("stream", stream).eq("face_verified", true);
+    const { data: permissions } = list.length ? await sb.from("quiz_entry_permissions").select("quiz_id,student_code").in("quiz_id", list.map((q) => q.id)) : { data: [] };
     const who = new Map((people ?? []).map((p) => [p.student_code, p]));
     const sections = [...new Set((roster ?? []).filter((r) => r.section).map((r) => classLabel(r.grade, r.section)))].sort();
     return {
       stream, sections,
       quizzes: list.map((q) => ({
         id: q.id, title: q.title, subject: q.subject, sections: q.sections, minutes: Math.round(q.duration_sec / 60), count: qs(q).length,
+        entryWindowSec: q.entry_window_sec,
+        lateStudents: q.status === "live" && quizEntryState(q.created_at, q.entry_window_sec, Date.now()).locked
+          ? (people ?? []).filter((p) => canTakeQuiz(p, q) && !(attempts ?? []).some((a) => a.quiz_id === q.id && a.student_code === p.student_code)).map((p) => ({ code: p.student_code, name: p.full_name, section: classLabel(p.grade, p.section), permitted: (permissions ?? []).some((x) => x.quiz_id === q.id && x.student_code === p.student_code) })) : [],
         marks: qs(q).reduce((s, x) => s + x.marks, 0), status: q.status, released: q.results_released, createdAt: q.created_at,
         attempts: (attempts ?? []).filter((a) => a.quiz_id === q.id).map((a) => {
           const p = who.get(a.student_code);
@@ -82,7 +86,7 @@ export const teacherStartQuiz = createServerFn({ method: "POST" })
     const sections = [...new Set(data.sections)];
     if (sections.some((s) => !allowed.has(s))) throw new Error("You can only give a quiz to sections of your own stream.");
     // The questions are copied, so later edits to the bank never change a quiz students already took.
-    const { data: row, error } = await sb.from("class_quizzes").insert({ teacher_id: t.id, bank_id: bank.id, subject: bank.subject, title: data.title, stream, sections, duration_sec: data.minutes * 60, questions, given: bank.given }).select("id").single();
+    const { data: row, error } = await sb.from("class_quizzes").insert({ teacher_id: t.id, bank_id: bank.id, subject: bank.subject, title: data.title, stream, sections, duration_sec: data.minutes * 60, questions, given: bank.given, entry_window_sec: QUIZ_ENTRY_SECONDS }).select("id").single();
     if (error || !row) throw new Error("Could not start the quiz.");
     return { id: row.id };
   });
@@ -121,6 +125,21 @@ export const teacherQuizReadmit = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+/** Permit a late student only for this teacher's live test and chosen classes. */
+export const teacherQuizPermit = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => z.object({ passcode: pass, teacherId: tid, quizId: z.string().uuid(), studentCode: z.string().max(30) }).parse(d))
+  .handler(async ({ data }) => {
+    const t = await teacher(data.passcode, data.teacherId);
+    const sb = await admin();
+    const { data: q } = await sb.from("class_quizzes").select("*").eq("id", data.quizId).eq("teacher_id", t.id).maybeSingle();
+    if (!q || q.status !== "live") throw new Error("Open your test before permitting entry.");
+    const { data: p } = await sb.from("registered_students").select("grade,section,stream").eq("student_code", data.studentCode).eq("face_verified", true).maybeSingle();
+    if (!p || !canTakeQuiz(p, q)) throw new Error("This student is not in the test's selected classes.");
+    const { error } = await sb.from("quiz_entry_permissions").upsert({ quiz_id: q.id, student_code: data.studentCode });
+    if (error) throw new Error("Could not permit entry.");
+    return { ok: true };
+  });
+
 /* ---------------- Student ---------------- */
 async function quizFor(st: { grade: string; section: string; stream: string }, quizId: string) {
   const sb = await admin();
@@ -139,10 +158,11 @@ export const studentQuizList = createServerFn({ method: "POST" })
     const list = (rows ?? []) as Quiz[];
     await settle(list.filter((q) => q.status === "live"));
     const { data: mine } = list.length ? await sb.from("quiz_attempts").select("quiz_id,status,score,total").eq("student_code", st.student_code).in("quiz_id", list.map((q) => q.id)) : { data: [] };
+    const { data: permissions } = list.length ? await sb.from("quiz_entry_permissions").select("quiz_id").eq("student_code", st.student_code).in("quiz_id", list.map((q) => q.id)) : { data: [] };
     const att = new Map((mine ?? []).map((a) => [a.quiz_id, a]));
     return list.filter((q) => q.status === "live" || att.has(q.id)).map((q) => {
       const a = att.get(q.id);
-      return { id: q.id, title: q.title, subject: q.subject, minutes: Math.round(q.duration_sec / 60), count: qs(q).length, live: q.status === "live", status: a?.status ?? null, released: q.results_released, score: q.results_released ? a?.score ?? null : null, total: q.results_released ? a?.total ?? null : null };
+      return { entry: quizEntryState(q.created_at, q.entry_window_sec, Date.now(), (permissions ?? []).some((p) => p.quiz_id === q.id), !!a), entryDeadline: q.entry_window_sec === null ? null : Date.parse(q.created_at) + q.entry_window_sec * 1000, id: q.id, title: q.title, subject: q.subject, minutes: Math.round(q.duration_sec / 60), count: qs(q).length, live: q.status === "live", status: a?.status ?? null, released: q.results_released, score: q.results_released ? a?.score ?? null : null, total: q.results_released ? a?.total ?? null : null };
     });
   });
 
@@ -168,7 +188,7 @@ export const studentQuizOpen = createServerFn({ method: "POST" })
       const ins = await sb.from("quiz_attempts").insert({ quiz_id: q.id, student_code: st.student_code, deadline_at: new Date(Date.now() + q.duration_sec * 1000).toISOString(), last_seen_at: now() }).select("*").single();
       if (ins.error) {
         const again = await sb.from("quiz_attempts").select("*").eq("quiz_id", q.id).eq("student_code", st.student_code).single();
-        if (!again.data) throw new Error("Could not start the quiz.");
+        if (!again.data) throw new Error(ins.error.message.includes("Late entry") ? "Late entry locked. Ask your teacher to permit entry." : "Could not start the quiz.");
         a = again.data;
       } else a = ins.data;
     }

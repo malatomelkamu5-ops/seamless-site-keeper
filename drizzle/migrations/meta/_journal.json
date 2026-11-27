@@ -43,6 +43,13 @@
       "when": 1795123475274,
       "tag": "0005_class_quizzes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795823699383,
+      "tag": "0006_class_quiz_late_entry",
+      "breakpoints": true
     }
   ]
 }

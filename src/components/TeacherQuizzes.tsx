@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { BookCheck, Play, Square, Eye, EyeOff, Trash2, RotateCcw, UserCheck } from "lucide-react";
+import { BookCheck, Play, Square, Eye, EyeOff, Trash2, RotateCcw, UserCheck, Download } from "lucide-react";
 import { Panel, Btn } from "@/components/Shell";
 import { fmt } from "@/lib/identity";
-import { QUIZ_MAX_MINUTES, QUIZ_MIN_MINUTES } from "@/lib/quiz-rules";
-import { teacherQuizzes, teacherStartQuiz, teacherQuizAction, teacherQuizReadmit } from "@/lib/quiz.functions";
+import { QUIZ_MAX_MINUTES, QUIZ_MIN_MINUTES, QUIZ_ENTRY_SECONDS } from "@/lib/quiz-rules";
+import { teacherQuizzes, teacherStartQuiz, teacherQuizAction, teacherQuizReadmit, teacherQuizPermit } from "@/lib/quiz.functions";
+
+import { downloadQuizExcel } from "@/lib/quiz-export";
 
 type Auth = { tid: string; pw: string };
 type Bank = { id: string; title: string; subject: string; questions: unknown[] };
@@ -16,6 +18,8 @@ export function TeacherQuizzes({ auth, banks }: { auth: Auth; banks: Bank[] }) {
   const start = useServerFn(teacherStartQuiz);
   const act = useServerFn(teacherQuizAction);
   const readmit = useServerFn(teacherQuizReadmit);
+  const permit = useServerFn(teacherQuizPermit);
+  const [selected, setSelected] = useState<string[]>([]);
   const qc = useQueryClient();
   const cred = { passcode: auth.pw, teacherId: auth.tid };
   const { data } = useQuery({ queryKey: ["teacher-quizzes", auth.tid], queryFn: () => list({ data: cred }), refetchInterval: 5000 });
@@ -51,6 +55,7 @@ export function TeacherQuizzes({ auth, banks }: { auth: Auth; banks: Bank[] }) {
             </div>
           </div>
           <label className="block text-xs text-muted-foreground">Time (minutes)<input type="number" className="field mt-1" min={QUIZ_MIN_MINUTES} max={QUIZ_MAX_MINUTES} value={minutes} onChange={(e) => setMinutes(Math.min(QUIZ_MAX_MINUTES, Math.max(QUIZ_MIN_MINUTES, +e.target.value || QUIZ_MIN_MINUTES)))} /></label>
+          <p className="text-xs text-warning">Entry closes {QUIZ_ENTRY_SECONDS / 60} minutes after you start this test. Students receive a warning with 2 minutes remaining.</p>
           <Btn className="w-full" disabled={busy || !bank || !sections.length}><Play className="h-4 w-4" />Start quiz</Btn>
           <p className="text-xs text-muted-foreground">Only the chosen sections see it. Fullscreen is strict: a student who leaves it more than 2 times is blocked until you re-admit them. Students see their score only after you release results.</p>
         </form>
@@ -59,14 +64,20 @@ export function TeacherQuizzes({ auth, banks }: { auth: Auth; banks: Bank[] }) {
         {err && <p role="alert" className="text-sm text-destructive">{err}</p>}
         {msg && <p role="status" className="text-sm text-accent">{msg}</p>}
         {!data.quizzes.length && <Panel title="My class quizzes" icon={<BookCheck className="h-4 w-4" />}><p className="text-sm text-muted-foreground">No quizzes yet.</p></Panel>}
+        {!!data.quizzes.length && <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
+          <span className="text-sm font-semibold">Test results</span>
+          <Btn variant="ghost" className="ml-auto" disabled={!data.quizzes.some((q) => selected.includes(q.id))} onClick={() => downloadQuizExcel(data.quizzes.filter((q) => selected.includes(q.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt)))}><Download className="h-4 w-4" />Download selected tests</Btn>
+        </div>}
         {data.quizzes.map((q) => {
           const done = q.attempts.filter((a) => a.status !== "in_progress");
           const avg = done.length ? Math.round(done.reduce((s, a) => s + (a.total ? (a.score ?? 0) / a.total : 0), 0) * 100 / done.length) : null;
           return (
             <Panel key={q.id} title={q.title} icon={<BookCheck className="h-4 w-4" />}
               action={<span className={`rounded-full border px-2.5 py-0.5 text-xs ${q.status === "live" ? "border-accent/50 text-accent" : "border-border text-muted-foreground"}`}>{q.status === "live" ? "Open" : "Closed"}</span>}>
+              <label className="mb-3 flex items-center gap-2 text-sm"><input type="checkbox" aria-label={`Select ${q.title} for Excel`} checked={selected.includes(q.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, q.id] : selected.filter((id) => id !== q.id))} />Select for Excel</label>
               <div className="mb-3 text-xs text-muted-foreground">{q.subject} · Grade {q.sections.join(", ")} · {q.count} Q · {q.marks} marks · {q.minutes} min · {new Date(q.createdAt).toLocaleString()}</div>
               <div className="mb-3 flex flex-wrap gap-2">
+                <Btn variant="ghost" className="py-1 text-xs" onClick={() => downloadQuizExcel([q])}><Download className="h-3.5 w-3.5" />Download Excel</Btn>
                 {q.status === "live"
                   ? <Btn variant="ghost" className="py-1 text-xs" disabled={busy} onClick={() => run(() => act({ data: { ...cred, quizId: q.id, action: "close" } }), "Quiz closed. Unfinished students were submitted.")}><Square className="h-3.5 w-3.5" />Close quiz</Btn>
                   : <Btn variant="ghost" className="py-1 text-xs" disabled={busy} onClick={() => run(() => act({ data: { ...cred, quizId: q.id, action: "reopen" } }), "Quiz opened again.")}><RotateCcw className="h-3.5 w-3.5" />Open again</Btn>}
@@ -78,6 +89,10 @@ export function TeacherQuizzes({ auth, banks }: { auth: Auth; banks: Bank[] }) {
                   : <Btn variant="ghost" className="py-1 text-xs" onClick={() => setConfirmDel(q.id)}><Trash2 className="h-3.5 w-3.5" />Delete</Btn>}
                 <span className="ml-auto self-center text-xs text-muted-foreground">{done.length} finished · {q.attempts.length - done.length} writing{avg !== null ? ` · average ${avg}%` : ""}</span>
               </div>
+              {!!q.lateStudents.length && <div className="mb-4 border-y border-border py-3">
+                <h3 className="mb-2 text-sm font-semibold text-warning">Late / unstarted students ({q.lateStudents.length})</h3>
+                <ul className="space-y-2">{q.lateStudents.map((p) => <li key={p.code} className="flex flex-wrap items-center gap-2 text-sm"><span className="min-w-0 flex-1 break-words">{p.name} · {p.section}</span>{p.permitted ? <span className="text-xs text-accent">Entry permitted</span> : <Btn variant="ghost" className="px-2 py-1 text-xs" disabled={busy} onClick={() => run(() => permit({ data: { ...cred, quizId: q.id, studentCode: p.code } }), `${p.name} can now start the test.`)}><UserCheck className="h-3.5 w-3.5" />Permit entry</Btn>}</li>)}</ul>
+              </div>}
               <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead><tr className="text-left text-xs text-muted-foreground"><th className="p-2">#</th><th className="p-2">Student</th><th className="p-2">Sec</th><th className="p-2">Status</th><th className="p-2">Marks</th><th className="p-2">%</th></tr></thead>
                 <tbody>{q.attempts.map((a, i) => {

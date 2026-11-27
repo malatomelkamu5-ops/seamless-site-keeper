@@ -20,6 +20,7 @@ export type Database = {
           closed_at: string | null
           created_at: string
           duration_sec: number
+          entry_window_sec: number | null
           given: string | null
           id: string
           questions: Json
@@ -36,6 +37,7 @@ export type Database = {
           closed_at?: string | null
           created_at?: string
           duration_sec?: number
+          entry_window_sec?: number | null
           given?: string | null
           id?: string
           questions?: Json
@@ -52,6 +54,7 @@ export type Database = {
           closed_at?: string | null
           created_at?: string
           duration_sec?: number
+          entry_window_sec?: number | null
           given?: string | null
           id?: string
           questions?: Json
@@ -386,6 +389,39 @@ export type Database = {
           },
           {
             foreignKeyName: "quiz_attempts_student_code_fkey"
+            columns: ["student_code"]
+            isOneToOne: false
+            referencedRelation: "registered_students"
+            referencedColumns: ["student_code"]
+          },
+        ]
+      }
+      quiz_entry_permissions: {
+        Row: {
+          granted_at: string
+          quiz_id: string
+          student_code: string
+        }
+        Insert: {
+          granted_at?: string
+          quiz_id: string
+          student_code: string
+        }
+        Update: {
+          granted_at?: string
+          quiz_id?: string
+          student_code?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "quiz_entry_permissions_quiz_id_fkey"
+            columns: ["quiz_id"]
+            isOneToOne: false
+            referencedRelation: "class_quizzes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "quiz_entry_permissions_student_code_fkey"
             columns: ["student_code"]
             isOneToOne: false
             referencedRelation: "registered_students"

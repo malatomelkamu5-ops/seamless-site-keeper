@@ -74,3 +74,6 @@
 - [x] Exam anti-cheating: blank screen when leaving the exam, name/ID watermark, split-screen check
 - [x] Android exam app (screenshots blocked, phone pinned during exams) with download on the home page and the bot "📱 Exam App" button
 - [ ] Publish so the app file and new bot button reach the live site (waiting on the user)
+- [x] Class tests: 10-minute entry cutoff, warning at 8 minutes, teacher late-entry permission (new tests only; existing tests preserved)
+- [x] Teacher: selected-test Excel exports and combined summary (download verified with temporary fixtures)
+- [x] Students: one-question-at-a-time released class-test review (navigation verified with temporary fixtures; live staff/student flow not verified without credentials)
