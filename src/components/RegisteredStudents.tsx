@@ -128,7 +128,17 @@ export function RegisteredStudents({ passcode, initial, onLock }: { passcode: st
         <span><strong className="text-xl text-primary">{directory.roster.filter((r) => r.kind === "student").length}</strong> School students</span>
         <span><strong className="text-xl">{directory.roster.filter((r) => r.kind === "teacher").length}</strong> Teachers</span>
       </div>
-      <span className="flex items-center gap-2 text-sm">Registration {directory.registrationOpen ? "open" : "closed"}<Toggle label="Registration open" on={directory.registrationOpen} onChange={async (v) => { try { await setReg({ data: { passcode, open: v } }); setDirectory({ ...directory, registrationOpen: v }); } catch (e) { setError(e instanceof Error ? e.message : "Could not update."); } }} /></span>
+      <span className="flex flex-wrap items-center gap-2 text-sm">
+        Registration {directory.registrationOpen ? "open" : "closed"}
+        <Toggle label="Registration open" on={directory.registrationOpen} onChange={async (v) => { try { const r = await setReg({ data: { passcode, open: v } }); setDirectory({ ...directory, registrationOpen: v, registrationCode: r.registrationCode }); } catch (e) { setError(e instanceof Error ? e.message : "Could not update."); } }} />
+        {directory.registrationOpen && directory.registrationCode && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 py-1 text-xs">
+            Code: <strong className="font-mono tracking-wider text-primary">{directory.registrationCode}</strong>
+            <button type="button" onClick={() => { navigator.clipboard?.writeText(directory.registrationCode ?? ""); setMessage("Registration code copied."); }} className="text-muted-foreground hover:text-foreground" title="Copy registration code"><Copy className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={async () => { try { const r = await setReg({ data: { passcode, open: true, regenerate: true } }); setDirectory({ ...directory, registrationCode: r.registrationCode }); setMessage("Generated a new registration code."); } catch (e) { setError(e instanceof Error ? e.message : "Could not update."); } }} className="text-muted-foreground hover:text-foreground" title="Generate new code"><RefreshCw className="h-3.5 w-3.5" /></button>
+          </span>
+        )}
+      </span>
       <Btn variant="ghost" onClick={refresh} disabled={busy} title="Refresh directory"><RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />Refresh</Btn>
       <Btn variant="ghost" onClick={onLock}><LockKeyhole className="h-4 w-4" />Lock</Btn>
     </div>

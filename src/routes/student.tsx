@@ -18,7 +18,7 @@ import { MAX_VIOLATIONS } from "@/lib/identity";
 import { ClassQuizzes } from "@/components/ClassQuizzes";
 import { detectTelegram, detectWebExamBlocked, isInstalledApp, isIosDevice } from "@/lib/telegram-webview";
 import { APP_DOWNLOAD_PATH } from "@/lib/telegram-bot";
-import { registerStudent, loginStudent, checkRegistrationName, studentPing, studentSignOut, type PublicStudent } from "@/lib/students.functions";
+import { registerStudent, loginStudent, studentPing, studentSignOut, type PublicStudent } from "@/lib/students.functions";
 
 export const Route = createFileRoute("/student")({
   head: () => ({
@@ -235,9 +235,8 @@ function Login({ onLogin, onBack }: { onLogin: (s: PublicStudent, pin: string) =
 
 function Register({ onDone, onBack }: { onDone: (s: PublicStudent, pin?: string) => void; onBack: () => void }) {
   const register = useServerFn(registerStudent);
-  const checkName = useServerFn(checkRegistrationName);
   const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [f, setF] = useState({ fullName: "", resultPin: "" });
+  const [f, setF] = useState({ registrationCode: "", fullName: "", resultPin: "" });
   const [pin2, setPin2] = useState("");
   const [photo, setPhoto] = useState<string | null>(null);
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
@@ -265,17 +264,17 @@ function Register({ onDone, onBack }: { onDone: (s: PublicStudent, pin?: string)
     <div className="tile mx-auto max-w-md space-y-4">
       <div className="flex items-center gap-2 text-xs text-muted-foreground"><span className={step === 1 ? "text-primary" : ""}>1 · Details</span><span>—</span><span className={step === 2 ? "text-primary" : ""}>2 · Live photo</span><span>—</span><span>3 · Your ID</span></div>
       {step === 1 ? (
-        <form className="space-y-3" onSubmit={async (e) => {
+        <form className="space-y-3" onSubmit={(e) => {
           e.preventDefault(); setErr("");
+          if (f.registrationCode.trim().length < 6) return setErr("Enter the registration code from IT Admin.");
+          if (f.fullName.trim().length < 3) return setErr("Enter your full name as in the school list.");
           if (!/^\d{4,6}$/.test(f.resultPin)) return setErr("Your result passcode must be 4 to 6 numbers.");
           if (f.resultPin !== pin2) return setErr("The two passcodes do not match.");
-          setBusy(true);
-          try { await checkName({ data: { name: f.fullName } }); setStep(2); }
-          catch (e) { setErr(e instanceof Error ? e.message : "Could not check your name."); }
-          finally { setBusy(false); }
+          setStep(2);
         }}>
           <img src="/school-logo.jpg" alt="Burka Harbu logo" className="mx-auto h-20 w-20 rounded-full ring-2 ring-primary/40 glow" />
           <h2 className="text-lg font-semibold">Student registration</h2>
+          <input className="field font-mono uppercase tracking-widest" placeholder="Registration code from IT Admin" value={f.registrationCode} onChange={(e) => setF({ ...f, registrationCode: e.target.value.toUpperCase() })} maxLength={32} required aria-label="Registration code" />
           <input className="field" placeholder="Full name as in the school list" value={f.fullName} onChange={(e) => setF({ ...f, fullName: e.target.value })} maxLength={100} required />
           <label className="block text-xs text-muted-foreground">Result passcode (4–6 numbers)
             <input className="field mt-1 font-mono tracking-widest" type="password" inputMode="numeric" autoComplete="new-password" pattern="\d{4,6}" maxLength={6} placeholder="e.g. 4821" value={f.resultPin} onChange={(e) => setF({ ...f, resultPin: e.target.value.replace(/\D/g, "") })} required aria-label="Result passcode" />
@@ -285,7 +284,7 @@ function Register({ onDone, onBack }: { onDone: (s: PublicStudent, pin?: string)
           <p className="text-xs text-muted-foreground">Your class (Grade 12 A, B or C), stream and official ID come from the school list.</p>
           <p className="text-xs text-muted-foreground">For the live photo: remove masks, scarves over the face and sunglasses.</p>
           {err && <p className="text-xs text-destructive">{err}</p>}
-          <Btn className="w-full" disabled={busy}>{busy ? "Checking name…" : "Next: live photo"}</Btn>
+          <Btn className="w-full" disabled={busy}>Next: live photo</Btn>
           <button type="button" onClick={onBack} className="block w-full text-center text-xs text-muted-foreground hover:text-foreground">← Back</button>
         </form>
       ) : (

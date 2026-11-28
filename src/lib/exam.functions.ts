@@ -21,13 +21,26 @@ const questionSchema = z.object({
   figure: z.string().regex(FIGURE_PATH).optional(),
 });
 const FIGURE_BUCKET = "question-figures";
-/** Short-lived links to question pictures in private storage. */
+/** Short-lived links to question pictures in private storage for active student exams. */
 export async function figureLinks(paths: (string | undefined)[]) {
   const unique = [...new Set(paths.filter((p): p is string => !!p))];
   if (!unique.length) return {} as Record<string, string>;
   const sb = await admin();
-  const { data } = await sb.storage.from(FIGURE_BUCKET).createSignedUrls(unique, 8 * 3600);
+  const { data } = await sb.storage.from(FIGURE_BUCKET).createSignedUrls(unique, 3 * 3600);
   return Object.fromEntries((data ?? []).filter((d) => d.signedUrl && d.path).map((d) => [d.path!, d.signedUrl]));
+}
+/** Streams private question figures directly after verifying the teacher so no signed storage link outlives revocation. */
+async function teacherFigureDataUrls(paths: string[]) {
+  const unique = [...new Set(paths.filter(Boolean))];
+  if (!unique.length) return {} as Record<string, string>;
+  const sb = await admin();
+  const { bytesToDataUrl } = await import("@/lib/face-grid");
+  const entries = await Promise.all(unique.map(async (p) => {
+    const { data } = await sb.storage.from(FIGURE_BUCKET).download(p);
+    if (!data) return null;
+    return [p, bytesToDataUrl(new Uint8Array(await data.arrayBuffer()))] as const;
+  }));
+  return Object.fromEntries(entries.filter((e): e is readonly [string, string] => e !== null));
 }
 const pass = z.string().min(1).max(200);
 const now = () => new Date().toISOString();
@@ -361,15 +374,15 @@ export const teacherUploadFigure = createServerFn({ method: "POST" })
     const sb = await admin();
     const { error } = await sb.storage.from(FIGURE_BUCKET).upload(path, bytes, { contentType: "image/jpeg", upsert: false });
     if (error) throw new Error("Could not save the picture. Please try again.");
-    return { path, url: (await figureLinks([path]))[path] ?? "" };
+    return { path, url: `data:image/jpeg;base64,${data.base64}` };
   });
 
-/** Links for the pictures in a teacher's own banks. */
+/** Private pictures in a teacher's own banks, served directly on verified credentials without long-lived signed URLs. */
 export const teacherFigureUrls = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, teacherId: z.string().max(30), paths: z.array(z.string().regex(FIGURE_PATH)).max(600) }).parse(d))
   .handler(async ({ data }) => {
     const t = await teacher(data.passcode, data.teacherId);
-    return figureLinks(data.paths.filter((p) => p.startsWith(`${t.id}/`)));
+    return teacherFigureDataUrls(data.paths.filter((p) => p.startsWith(`${t.id}/`)));
   });
 
 /* ---------------- Student exam ---------------- */

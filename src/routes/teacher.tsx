@@ -153,7 +153,7 @@ type Auth = { tid: string; pw: string };
 function useFigureUrls(auth: Auth, paths: (string | undefined)[]) {
   const get = useServerFn(teacherFigureUrls);
   const need = [...new Set(paths.filter((p): p is string => !!p && !localFigureUrls.has(p)))].sort();
-  const { data = {} } = useQuery({ queryKey: ["figures", auth.tid, need.join("|")], enabled: need.length > 0, staleTime: 3_600_000, queryFn: () => get({ data: { passcode: auth.pw, teacherId: auth.tid, paths: need } }) });
+  const { data = {} } = useQuery({ queryKey: ["figures", auth.tid, need.join("|")], enabled: need.length > 0, staleTime: 60_000, queryFn: () => get({ data: { passcode: auth.pw, teacherId: auth.tid, paths: need } }) });
   return (path?: string) => (path ? localFigureUrls.get(path) ?? data[path] : undefined);
 }
 

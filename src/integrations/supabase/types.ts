@@ -220,6 +220,7 @@ export type Database = {
           hidden_staff_roles: string[]
           id: number
           practice_mode: boolean
+          registration_code: string | null
           registration_open: boolean
           results_published: boolean
           sat_enabled: boolean
@@ -242,6 +243,7 @@ export type Database = {
           hidden_staff_roles?: string[]
           id?: number
           practice_mode?: boolean
+          registration_code?: string | null
           registration_open?: boolean
           results_published?: boolean
           sat_enabled?: boolean
@@ -264,6 +266,7 @@ export type Database = {
           hidden_staff_roles?: string[]
           id?: number
           practice_mode?: boolean
+          registration_code?: string | null
           registration_open?: boolean
           results_published?: boolean
           sat_enabled?: boolean

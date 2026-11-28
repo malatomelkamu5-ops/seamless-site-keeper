@@ -87,3 +87,20 @@ export function afterWrongPin(failures: number, time = Date.now()) {
   const n = failures + 1;
   return n >= PIN_MAX_FAILURES ? { pin_failures: 0, pin_locked_until: new Date(time + PIN_LOCK_MS).toISOString() } : { pin_failures: n, pin_locked_until: null };
 }
+
+const REG_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+/** Normalizes a registration access code by stripping dashes/spaces and uppercasing. */
+export const normalizeRegistrationCode = (code: string) => code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+/** Generates an 8-character cryptographic registration code formatted as XXXX-XXXX. */
+export function generateRegistrationCode() {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  const raw = Array.from(bytes, (b) => REG_ALPHABET[b % REG_ALPHABET.length]).join("");
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+/** True only when a non-empty server registration code is configured and matches the caller's input. */
+export function matchesRegistrationCode(provided: string, expected: string | null | undefined) {
+  const exp = expected ? normalizeRegistrationCode(expected) : "";
+  const got = normalizeRegistrationCode(provided);
+  return exp.length >= 6 && got === exp;
+}

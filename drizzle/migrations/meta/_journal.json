@@ -50,6 +50,13 @@
       "when": 1795823699383,
       "tag": "0006_class_quiz_late_entry",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795831133726,
+      "tag": "0007_lock_down_public_grants_and_add_registration_code",
+      "breakpoints": true
     }
   ]
 }

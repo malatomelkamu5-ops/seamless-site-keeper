@@ -4,7 +4,7 @@ import { normalizeName, requireRosterName, requireAdminPin } from "@/lib/identit
 import type { TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 export { normalizeName } from "@/lib/identity";
 
-import { canReplaceFace, teacherRowSchema, teacherDetailsSchema, studentDetailsSchema, academicYear, sessionBlocksSignIn, teacherCredentialKey, RESULT_PIN, hashResultPin, pinLocked, afterWrongPin } from "@/lib/admin-rules";
+import { canReplaceFace, teacherRowSchema, teacherDetailsSchema, studentDetailsSchema, academicYear, sessionBlocksSignIn, teacherCredentialKey, RESULT_PIN, hashResultPin, pinLocked, afterWrongPin, generateRegistrationCode, matchesRegistrationCode } from "@/lib/admin-rules";
 
 const BUCKET = "student-photos";
 
@@ -15,6 +15,7 @@ async function admin() {
 
 // Class, stream and gender come from the school roster record, not the form.
 const registerSchema = z.object({
+  registrationCode: z.string().trim().min(4, "Enter the registration code from IT Admin").max(32),
   fullName: z.string().trim().min(3, "Enter your full name").max(100),
   photo: z.string().startsWith("data:image/jpeg;base64,").max(3_000_000),
   resultPin: z.string().regex(RESULT_PIN, "Your result passcode must be 4 to 6 numbers."),
@@ -82,8 +83,9 @@ export const registerStudent = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => registerSchema.parse(d))
   .handler(async ({ data }) => {
     const sb = await admin();
-    const { data: settings } = await sb.from("exam_settings").select("registration_open").eq("id", 1).single();
+    const { data: settings } = await sb.from("exam_settings").select("registration_open,registration_code").eq("id", 1).single();
     if (!settings?.registration_open) throw new Error("Registration is closed. Please contact IT Admin.");
+    if (!matchesRegistrationCode(data.registrationCode, settings.registration_code)) throw new Error("Invalid registration code. Ask IT Admin for today's registration code.");
     const { data: roster, error: rosterError } = await sb.from("school_roster").select("*").eq("kind", "student");
     if (rosterError) throw new Error("Could not check the school list. Please try again.");
     const record = requireRosterName(roster ?? [], data.fullName);
@@ -180,15 +182,17 @@ function checkPasscode(p: string) {
 }
 
 export const adminSetRegistration = createServerFn({ method: "POST" })
-  .inputValidator((d: unknown) => z.object({ passcode: z.string().min(1).max(200), open: z.boolean() }).parse(d))
+  .inputValidator((d: unknown) => z.object({ passcode: z.string().min(1).max(200), open: z.boolean(), regenerate: z.boolean().optional() }).parse(d))
   .handler(async ({ data }) => {
     checkPasscode(data.passcode);
     const sb = await admin();
-    const { error } = await sb.from("exam_settings").upsert({ id: 1, registration_open: data.open, updated_at: new Date().toISOString() });
+    const { data: current } = await sb.from("exam_settings").select("registration_code").eq("id", 1).maybeSingle();
+    const registrationCode = data.open ? (data.regenerate || !current?.registration_code ? generateRegistrationCode() : current.registration_code) : null;
+    const { error } = await sb.from("exam_settings").upsert({ id: 1, registration_open: data.open, registration_code: registrationCode, updated_at: new Date().toISOString() });
     if (error) throw new Error("Could not update registration.");
     const { notifyStatusChanges } = await import("@/lib/telegram.server");
     await notifyStatusChanges().catch((e) => console.error("Telegram notice failed", e));
-    return { ok: true };
+    return { ok: true, registrationCode };
   });
 
 export const adminListStudents = createServerFn({ method: "POST" })
@@ -213,16 +217,6 @@ export const adminDeleteStudent = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-export const checkRegistrationName = createServerFn({ method: "POST" })
-  .inputValidator((d: unknown) => z.object({ name: z.string().trim().min(3).max(100) }).parse(d))
-  .handler(async ({ data }) => {
-    const sb = await admin();
-    const { data: rows, error } = await sb.from("school_roster").select("*").eq("kind", "student");
-    if (error) throw new Error("Could not check the school list.");
-    requireRosterName(rows ?? [], data.name);
-    return { ok: true };
-  });
-
 export type RosterPerson = { id: string; full_name: string; kind: string; grade: string; section: string; stream: string; gender: string; subjects: string[]; batch: string };
 export const adminDirectory = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: z.string().min(1).max(200) }).parse(d))
@@ -234,8 +228,8 @@ export const adminDirectory = createServerFn({ method: "POST" })
       sb.from("registered_students").select("*").order("created_at", { ascending: false }),
     ]);
     if (roster.error || registered.error) throw new Error("Could not load the school directory.");
-    const { data: st } = await sb.from("exam_settings").select("registration_open,hidden_staff_roles").eq("id", 1).single();
-    return { hiddenStaffRoles: st?.hidden_staff_roles ?? [], registrationOpen: !!st?.registration_open, roster: roster.data, registered: await Promise.all(registered.data.map(toPublic)) };
+    const { data: st } = await sb.from("exam_settings").select("registration_open,registration_code,hidden_staff_roles").eq("id", 1).single();
+    return { hiddenStaffRoles: st?.hidden_staff_roles ?? [], registrationOpen: !!st?.registration_open, registrationCode: st?.registration_open ? (st.registration_code ?? null) : null, roster: roster.data, registered: await Promise.all(registered.data.map(toPublic)) };
   });
 
 export const adminEditName = createServerFn({ method: "POST" })
