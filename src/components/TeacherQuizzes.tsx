@@ -4,8 +4,8 @@ import { useServerFn } from "@tanstack/react-start";
 import { BookCheck, Play, Square, Eye, EyeOff, Trash2, RotateCcw, UserCheck, Download } from "lucide-react";
 import { Panel, Btn } from "@/components/Shell";
 import { fmt } from "@/lib/identity";
-import { QUIZ_MAX_MINUTES, QUIZ_MIN_MINUTES, QUIZ_ENTRY_SECONDS } from "@/lib/quiz-rules";
-import { teacherQuizzes, teacherStartQuiz, teacherQuizAction, teacherQuizReadmit, teacherQuizPermit } from "@/lib/quiz.functions";
+import { QUIZ_MAX_MINUTES, QUIZ_MIN_MINUTES, QUIZ_ENTRY_SECONDS, QUIZ_ENTRY_OPTIONS } from "@/lib/quiz-rules";
+import { teacherQuizzes, teacherStartQuiz, teacherQuizAction, teacherQuizReadmit, teacherQuizPermit, teacherQuizPermitAll } from "@/lib/quiz.functions";
 
 import { downloadQuizExcel } from "@/lib/quiz-export";
 
@@ -19,12 +19,14 @@ export function TeacherQuizzes({ auth, banks }: { auth: Auth; banks: Bank[] }) {
   const act = useServerFn(teacherQuizAction);
   const readmit = useServerFn(teacherQuizReadmit);
   const permit = useServerFn(teacherQuizPermit);
+  const permitAll = useServerFn(teacherQuizPermitAll);
   const [selected, setSelected] = useState<string[]>([]);
   const qc = useQueryClient();
   const cred = { passcode: auth.pw, teacherId: auth.tid };
   const { data } = useQuery({ queryKey: ["teacher-quizzes", auth.tid], queryFn: () => list({ data: cred }), refetchInterval: 5000 });
   const usable = banks.filter((b) => b.questions.length);
   const [bankId, setBankId] = useState(""); const [title, setTitle] = useState(""); const [minutes, setMinutes] = useState(20);
+  const [entryWindowSec, setEntryWindowSec] = useState<number | null>(QUIZ_ENTRY_SECONDS);
   const [sections, setSections] = useState<string[]>([]);
   const [msg, setMsg] = useState(""); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export function TeacherQuizzes({ auth, banks }: { auth: Auth; banks: Bank[] }) {
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Panel title="Give a class quiz" icon={<Play className="h-4 w-4" />}>
-        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (!bank) return; run(async () => { await start({ data: { ...cred, bankId: bank.id, title: title.trim() || bank.title, sections, minutes } }); setBankId(""); setTitle(""); setSections([]); }, "Quiz started. Students of the chosen sections can open it now."); }}>
+        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (!bank) return; run(async () => { await start({ data: { ...cred, bankId: bank.id, title: title.trim() || bank.title, sections, minutes, entryWindowSec } }); setBankId(""); setTitle(""); setSections([]); }, "Quiz started. Students of the chosen sections can open it now."); }}>
           <label className="block text-xs text-muted-foreground">Question bank
             <select className="field mt-1" value={bankId} onChange={(e) => { setBankId(e.target.value); setTitle(usable.find((b) => b.id === e.target.value)?.title ?? ""); }} required>
               <option value="">Choose one of your banks</option>
@@ -55,7 +57,12 @@ export function TeacherQuizzes({ auth, banks }: { auth: Auth; banks: Bank[] }) {
             </div>
           </div>
           <label className="block text-xs text-muted-foreground">Time (minutes)<input type="number" className="field mt-1" min={QUIZ_MIN_MINUTES} max={QUIZ_MAX_MINUTES} value={minutes} onChange={(e) => setMinutes(Math.min(QUIZ_MAX_MINUTES, Math.max(QUIZ_MIN_MINUTES, +e.target.value || QUIZ_MIN_MINUTES)))} /></label>
-          <p className="text-xs text-warning">Entry closes {QUIZ_ENTRY_SECONDS / 60} minutes after you start this test. Students receive a warning with 2 minutes remaining.</p>
+          <label className="block text-xs text-muted-foreground">Late entry window
+            <select className="field mt-1" value={entryWindowSec === null ? "none" : String(entryWindowSec)} onChange={(e) => setEntryWindowSec(e.target.value === "none" ? null : Number(e.target.value))}>
+              {QUIZ_ENTRY_OPTIONS.map((opt) => <option key={opt === null ? "none" : opt} value={opt === null ? "none" : String(opt)}>{opt === null ? "No cutoff (students may start any time)" : `${opt / 60} minutes after start${opt === QUIZ_ENTRY_SECONDS ? " (default)" : ""}`}</option>)}
+            </select>
+          </label>
+          {entryWindowSec !== null && <p className="text-xs text-warning">Entry closes {entryWindowSec / 60} minutes after you start this test. You can admit late students in one click.</p>}
           <Btn className="w-full" disabled={busy || !bank || !sections.length}><Play className="h-4 w-4" />Start quiz</Btn>
           <p className="text-xs text-muted-foreground">Only the chosen sections see it. Fullscreen is strict: a student who leaves it more than 2 times is blocked until you re-admit them. Students see their score only after you release results.</p>
         </form>
@@ -90,7 +97,14 @@ export function TeacherQuizzes({ auth, banks }: { auth: Auth; banks: Bank[] }) {
                 <span className="ml-auto self-center text-xs text-muted-foreground">{done.length} finished · {q.attempts.length - done.length} writing{avg !== null ? ` · average ${avg}%` : ""}</span>
               </div>
               {!!q.lateStudents.length && <div className="mb-4 border-y border-border py-3">
-                <h3 className="mb-2 text-sm font-semibold text-warning">Late / unstarted students ({q.lateStudents.length})</h3>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-warning">Late / unstarted students ({q.lateStudents.length})</h3>
+                  {q.lateStudents.some((p) => !p.permitted) && (
+                    <Btn variant="ghost" className="px-2.5 py-1 text-xs" disabled={busy} onClick={() => run(() => permitAll({ data: { ...cred, quizId: q.id } }), "All late students have been permitted to start the test.")}>
+                      <UserCheck className="h-3.5 w-3.5" />Admit all late students
+                    </Btn>
+                  )}
+                </div>
                 <ul className="space-y-2">{q.lateStudents.map((p) => <li key={p.code} className="flex flex-wrap items-center gap-2 text-sm"><span className="min-w-0 flex-1 break-words">{p.name} · {p.section}</span>{p.permitted ? <span className="text-xs text-accent">Entry permitted</span> : <Btn variant="ghost" className="px-2 py-1 text-xs" disabled={busy} onClick={() => run(() => permit({ data: { ...cred, quizId: q.id, studentCode: p.code } }), `${p.name} can now start the test.`)}><UserCheck className="h-3.5 w-3.5" />Permit entry</Btn>}</li>)}</ul>
               </div>}
               <div className="overflow-x-auto"><table className="w-full text-sm">

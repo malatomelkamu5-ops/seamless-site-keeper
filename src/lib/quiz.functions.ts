@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { teacherStream } from "@/lib/admin-rules";
-import { readmitDeadline, remainingSeconds } from "@/lib/exam-timing";
+import { readmitDeadline, remainingSeconds, mergeAnswers } from "@/lib/exam-timing";
 import { shuffle } from "@/lib/identity";
 import { groupByPassage } from "@/lib/paper";
 import { canTakeQuiz, classLabel, quizScore, quizShouldBlock, QUIZ_MAX_MINUTES, QUIZ_MIN_MINUTES, QUIZ_MAX_QUESTIONS, QUIZ_ENTRY_SECONDS, quizEntryState } from "@/lib/quiz-rules";
@@ -23,11 +23,20 @@ async function settle(quizzes: Quiz[]) {
   if (!quizzes.length) return;
   const sb = await admin();
   const byId = new Map(quizzes.map((q) => [q.id, q]));
-  const { data } = await sb.from("quiz_attempts").select("*").in("quiz_id", [...byId.keys()]).eq("status", "in_progress");
-  for (const a of data ?? []) {
+  const closedIds = quizzes.filter((q) => q.status !== "live").map((q) => q.id);
+  const liveIds = quizzes.filter((q) => q.status === "live").map((q) => q.id);
+  const expired: { id: string; quiz_id: string; answers: unknown }[] = [];
+  if (closedIds.length) {
+    const { data } = await sb.from("quiz_attempts").select("id,quiz_id,answers").in("quiz_id", closedIds).eq("status", "in_progress");
+    if (data) expired.push(...data);
+  }
+  if (liveIds.length) {
+    const { data } = await sb.from("quiz_attempts").select("id,quiz_id,answers").in("quiz_id", liveIds).eq("status", "in_progress").lte("deadline_at", now());
+    if (data) expired.push(...data);
+  }
+  for (const a of expired) {
     const q = byId.get(a.quiz_id);
     if (!q) continue;
-    if (q.status === "live" && remainingSeconds(a.deadline_at) > 0) continue;
     const { score, total } = quizScore(qs(q), a.answers as Record<string, number>);
     await sb.from("quiz_attempts").update({ status: "submitted", score, total, submitted_at: now() }).eq("id", a.id).eq("status", "in_progress");
   }
@@ -71,6 +80,7 @@ export const teacherStartQuiz = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({
     passcode: pass, teacherId: tid, bankId: z.string().uuid(), title: z.string().trim().min(1).max(120),
     sections: z.array(z.string().regex(/^\d{1,2}[A-Z]{1,2}$/)).min(1).max(20), minutes: z.number().int().min(QUIZ_MIN_MINUTES).max(QUIZ_MAX_MINUTES),
+    entryWindowSec: z.number().int().min(60).max(7200).nullable().optional(),
   }).parse(d))
   .handler(async ({ data }) => {
     const t = await teacher(data.passcode, data.teacherId);
@@ -86,7 +96,8 @@ export const teacherStartQuiz = createServerFn({ method: "POST" })
     const sections = [...new Set(data.sections)];
     if (sections.some((s) => !allowed.has(s))) throw new Error("You can only give a quiz to sections of your own stream.");
     // The questions are copied, so later edits to the bank never change a quiz students already took.
-    const { data: row, error } = await sb.from("class_quizzes").insert({ teacher_id: t.id, bank_id: bank.id, subject: bank.subject, title: data.title, stream, sections, duration_sec: data.minutes * 60, questions, given: bank.given, entry_window_sec: QUIZ_ENTRY_SECONDS }).select("id").single();
+    const entryWindow = data.entryWindowSec === undefined ? QUIZ_ENTRY_SECONDS : data.entryWindowSec;
+    const { data: row, error } = await sb.from("class_quizzes").insert({ teacher_id: t.id, bank_id: bank.id, subject: bank.subject, title: data.title, stream, sections, duration_sec: data.minutes * 60, questions, given: bank.given, entry_window_sec: entryWindow }).select("id").single();
     if (error || !row) throw new Error("Could not start the quiz.");
     return { id: row.id };
   });
@@ -138,6 +149,28 @@ export const teacherQuizPermit = createServerFn({ method: "POST" })
     const { error } = await sb.from("quiz_entry_permissions").upsert({ quiz_id: q.id, student_code: data.studentCode });
     if (error) throw new Error("Could not permit entry.");
     return { ok: true };
+  });
+
+/** Permit all unstarted students in this teacher's live test at once. */
+export const teacherQuizPermitAll = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => z.object({ passcode: pass, teacherId: tid, quizId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const t = await teacher(data.passcode, data.teacherId);
+    const sb = await admin();
+    const { data: q } = await sb.from("class_quizzes").select("*").eq("id", data.quizId).eq("teacher_id", t.id).maybeSingle();
+    if (!q || q.status !== "live") throw new Error("Open your test before permitting entry.");
+    const quiz = q as Quiz;
+    const [{ data: people }, { data: attempts }] = await Promise.all([
+      sb.from("registered_students").select("student_code,grade,section,stream").eq("stream", quiz.stream).eq("face_verified", true),
+      sb.from("quiz_attempts").select("student_code").eq("quiz_id", quiz.id),
+    ]);
+    const started = new Set((attempts ?? []).map((a) => a.student_code));
+    const rows = (people ?? []).filter((p) => canTakeQuiz(p, quiz) && !started.has(p.student_code)).map((p) => ({ quiz_id: quiz.id, student_code: p.student_code }));
+    if (rows.length) {
+      const { error } = await sb.from("quiz_entry_permissions").upsert(rows);
+      if (error) throw new Error("Could not permit all late students.");
+    }
+    return { ok: true, count: rows.length };
   });
 
 /* ---------------- Student ---------------- */
@@ -209,18 +242,19 @@ export const studentQuizSync = createServerFn({ method: "POST" })
     const base = { pauseReason: null as string | null, paused: false, examLive: q.status === "live" };
     const left = remainingSeconds(a.deadline_at);
     if (a.status !== "in_progress") return { ...base, status: a.status, violations: a.violations, secondsLeft: 0, timeUp: false };
+    const mergedAnswers = mergeAnswers(a.answers as Record<string, number>, data.answers);
     const violations = a.violations + (data.violation ? 1 : 0);
-    const { score, total } = quizScore(qs(q), data.answers);
+    const { score, total } = quizScore(qs(q), mergedAnswers);
     if (quizShouldBlock(violations)) {
-      await sb.from("quiz_attempts").update({ status: "blocked", answers: data.answers, violations, score, total, submitted_at: now(), blocked_at: now() }).eq("id", a.id).eq("status", "in_progress");
+      await sb.from("quiz_attempts").update({ status: "blocked", answers: mergedAnswers, violations, score, total, submitted_at: now(), blocked_at: now() }).eq("id", a.id).eq("status", "in_progress");
       return { ...base, status: "blocked", violations, secondsLeft: left, timeUp: false };
     }
     const timeUp = left <= 0 || q.status !== "live";
     if (data.submit || timeUp) {
-      await sb.from("quiz_attempts").update({ status: "submitted", answers: data.answers, violations, score, total, submitted_at: now() }).eq("id", a.id).eq("status", "in_progress");
+      await sb.from("quiz_attempts").update({ status: "submitted", answers: mergedAnswers, violations, score, total, submitted_at: now() }).eq("id", a.id).eq("status", "in_progress");
       return { ...base, status: "submitted", violations, secondsLeft: left, timeUp: timeUp && !data.submit };
     }
-    await sb.from("quiz_attempts").update({ answers: data.answers, violations, last_seen_at: now(), ...(data.current !== undefined ? { current_question: data.current } : {}) }).eq("id", a.id).eq("status", "in_progress");
+    await sb.from("quiz_attempts").update({ answers: mergedAnswers, violations, last_seen_at: now(), ...(data.current !== undefined ? { current_question: data.current } : {}) }).eq("id", a.id).eq("status", "in_progress");
     return { ...base, status: "in_progress", violations, secondsLeft: left, timeUp: false };
   });
 

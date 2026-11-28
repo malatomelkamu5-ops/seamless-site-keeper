@@ -64,7 +64,9 @@ export function academicYear(date = new Date()) {
 
 /** A student's own sign-in session counts as active for this long after their last request. */
 export const SESSION_ACTIVE_MS = 2 * 60 * 1000;
-export function sessionBlocksSignIn(examLive: boolean, seenAt: string | null, time = Date.now()) {
+/** Verified Student ID + passcode sign-ins always resume cleanly instead of locking the student out; single-device enforcement happens via session token replacement. */
+export function sessionBlocksSignIn(examLive: boolean, seenAt: string | null, time = Date.now(), pinVerified = false) {
+  if (pinVerified) return false;
   return examLive && !!seenAt && time - Date.parse(seenAt) < SESSION_ACTIVE_MS;
 }
 

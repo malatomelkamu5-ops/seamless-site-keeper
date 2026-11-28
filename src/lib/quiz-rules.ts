@@ -5,7 +5,8 @@ export const quizShouldBlock = (violations: number) => violations > QUIZ_MAX_WAR
 export const QUIZ_MIN_MINUTES = 5;
 export const QUIZ_MAX_MINUTES = 180;
 export const QUIZ_MAX_QUESTIONS = 100;
-export const QUIZ_ENTRY_SECONDS = 600;
+export const QUIZ_ENTRY_SECONDS = 1200;
+export const QUIZ_ENTRY_OPTIONS = [600, 1200, 1800, null] as const;
 export const QUIZ_ENTRY_WARNING_SECONDS = 120;
 /** Existing attempts and teacher-permitted latecomers are not subject to the entry cutoff. */
 export function quizEntryState(openedAt: string, windowSec: number | null, time: number, permitted = false, started = false) {

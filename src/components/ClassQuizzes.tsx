@@ -13,7 +13,7 @@ import type { PublicStudent } from "@/lib/students.functions";
 export function ClassQuizzes({ student, onStart }: { student: PublicStudent; onStart: (quizId: string) => void }) {
   const list = useServerFn(studentQuizList);
   const who = { name: student.name, id: student.id, token: student.sessionToken ?? "" };
-  const { data = [] } = useQuery({ queryKey: ["quizzes", student.id], queryFn: () => list({ data: who }), refetchInterval: 5000 });
+  const { data = [] } = useQuery({ queryKey: ["quizzes", student.id], queryFn: () => list({ data: who }), refetchInterval: 12000 });
   const [time, setTime] = useState(0);
   useEffect(() => { setTime(Date.now()); const timer = setInterval(() => setTime(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const [review, setReview] = useState<string | null>(null);

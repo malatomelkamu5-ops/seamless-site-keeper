@@ -17,21 +17,24 @@ describe("class quizzes", () => {
   });
   const opened = "2026-11-28T06:00:00Z";
   const start = Date.parse(opened);
-  it("warns at 8 minutes with 2 minutes remaining", () => {
-    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 479_000).warning).toBe(false);
-    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 480_000)).toEqual({ locked: false, warning: true, secondsLeft: 120 });
+  it("defaults to a 20-minute entry window and warns with 2 minutes remaining", () => {
+    expect(QUIZ_ENTRY_SECONDS).toBe(1200);
+    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 1079_000).warning).toBe(false);
+    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 1080_000)).toEqual({ locked: false, warning: true, secondsLeft: 120 });
   });
-  it("locks new starts at exactly 10 minutes", () => {
-    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 599_000).locked).toBe(false);
-    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 600_000).locked).toBe(true);
+  it("locks new starts when the chosen entry window expires", () => {
+    expect(quizEntryState(opened, 600, start + 599_000).locked).toBe(false);
+    expect(quizEntryState(opened, 600, start + 600_000).locked).toBe(true);
+    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 1199_000).locked).toBe(false);
+    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 1200_000).locked).toBe(true);
   });
   it("allows a teacher-permitted late student", () => {
-    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 900_000, true).locked).toBe(false);
+    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 1500_000, true).locked).toBe(false);
   });
   it("never cuts off a student who already started", () => {
-    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 900_000, false, true).locked).toBe(false);
+    expect(quizEntryState(opened, QUIZ_ENTRY_SECONDS, start + 1500_000, false, true).locked).toBe(false);
   });
   it("preserves unrestricted entry for older tests", () => {
-    expect(quizEntryState(opened, null, start + 900_000).locked).toBe(false);
+    expect(quizEntryState(opened, null, start + 1500_000).locked).toBe(false);
   });
 });

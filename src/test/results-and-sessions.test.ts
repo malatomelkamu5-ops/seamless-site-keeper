@@ -33,10 +33,11 @@ describe("school-year batches", () => {
 
 describe("single student sign-in", () => {
   const now = Date.parse("2026-11-01T10:00:00Z");
-  it("blocks a second sign-in while the exam is live and the first session is active", () => {
-    expect(sessionBlocksSignIn(true, "2026-11-01T09:59:30Z", now)).toBe(true);
+  it("allows a verified ID + passcode sign-in to resume cleanly even while the exam is live", () => {
+    expect(sessionBlocksSignIn(true, "2026-11-01T09:59:30Z", now, true)).toBe(false);
   });
-  it("allows sign-in when the exam is not live or the old session went quiet", () => {
+  it("still detects an active unverified session while the exam is live", () => {
+    expect(sessionBlocksSignIn(true, "2026-11-01T09:59:30Z", now)).toBe(true);
     expect(sessionBlocksSignIn(false, "2026-11-01T09:59:30Z", now)).toBe(false);
     expect(sessionBlocksSignIn(true, "2026-11-01T09:55:00Z", now)).toBe(false);
   });

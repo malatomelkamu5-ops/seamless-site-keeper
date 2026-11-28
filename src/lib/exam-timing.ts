@@ -16,15 +16,30 @@ export function remainingSeconds(deadline: string | null, time = Date.now()) {
   return deadline ? Math.max(0, Math.ceil((Date.parse(deadline) - time) / 1000)) : 0;
 }
 /** A student's device that stops reporting for this long (power cut, lost internet) has its timer frozen. */
-export const DISCONNECT_GRACE_SEC = 6;
-/** How often an exam device reports to the server while the exam is open. */
-export const HEARTBEAT_MS = 2000;
+export const DISCONNECT_GRACE_SEC = 45;
+/** How often an exam device sends a background keep-alive while the exam is open. */
+export const HEARTBEAT_MS = 15_000;
+/** Wait this long after the latest answer tap before syncing so rapid taps send one write. */
+export const ANSWER_SYNC_DEBOUNCE_MS = 1_500;
+/** Only refresh registered_students.session_seen_at after this many milliseconds to avoid write contention. */
+export const SESSION_TOUCH_MS = 60_000;
+/** Only freeze a Director exam for offline loss when the device stays offline this long. */
+export const OFFLINE_FREEZE_DELAY_MS = 15_000;
 
-/** A connection-paused student is back online when their device reported again after the pause and within the last 20 seconds. */
+export function shouldTouchSession(seenAt: string | null | undefined, time = Date.now()) {
+  return !seenAt || time - Date.parse(seenAt) >= SESSION_TOUCH_MS;
+}
+
+/** Preserves previously saved answers while letting newer answers from the active device overwrite changed choices. */
+export function mergeAnswers(existing: Record<string, number> | null | undefined, incoming: Record<string, number>) {
+  return { ...(existing ?? {}), ...incoming };
+}
+
+/** A connection-paused student is back online when their device reported again after the pause and within the grace window. */
 export function backOnline(lastSeen: string | null, pausedAt: string | null, time = Date.now()) {
   if (!lastSeen || !pausedAt) return false;
   const seen = Date.parse(lastSeen);
-  return seen > Date.parse(pausedAt) && time - seen < 20_000;
+  return seen > Date.parse(pausedAt) && time - seen < DISCONNECT_GRACE_SEC * 1000;
 }
 
 export function admittedToRoom(code: string, selected: string[] | null) { return selected === null || selected.includes(code); }

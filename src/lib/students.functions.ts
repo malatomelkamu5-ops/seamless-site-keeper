@@ -4,7 +4,7 @@ import { normalizeName, requireRosterName, requireAdminPin } from "@/lib/identit
 import type { TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 export { normalizeName } from "@/lib/identity";
 
-import { canReplaceFace, teacherRowSchema, teacherDetailsSchema, studentDetailsSchema, academicYear, sessionBlocksSignIn, teacherCredentialKey, RESULT_PIN, hashResultPin, pinLocked, afterWrongPin, signPinGuard, verifyPinGuard, generateRegistrationCode, matchesRegistrationCode, FACE_CHECK_STUDENT_WINDOW_MS, FACE_CHECK_SCHOOL_WINDOW_MS, faceCheckQuotaError } from "@/lib/admin-rules";
+import { canReplaceFace, teacherRowSchema, teacherDetailsSchema, studentDetailsSchema, academicYear, teacherCredentialKey, RESULT_PIN, hashResultPin, pinLocked, afterWrongPin, signPinGuard, verifyPinGuard, generateRegistrationCode, matchesRegistrationCode, FACE_CHECK_STUDENT_WINDOW_MS, FACE_CHECK_SCHOOL_WINDOW_MS, faceCheckQuotaError } from "@/lib/admin-rules";
 
 const BUCKET = "student-photos";
 const PIN_GUARD_COOKIE = "bh_pin_guard";
@@ -172,15 +172,7 @@ export const loginStudent = createServerFn({ method: "POST" })
     }
     if (!row) return wrong;
     if (!row.face_verified) return { ok: false as const, error: "IT Admin reset your face verification. Please register again with a fresh photo." };
-    if (!sameDevice) {
-      const { data: st } = await sb.from("exam_settings").select("exam_live,current_round").eq("id", 1).single();
-      // A device that lost power or internet has its exam frozen; the student may sign in again (on the same or another device) to wait for the Director.
-      const { data: frozen } = await sb.from("exam_attempts").select("id").eq("student_code", row.student_code).eq("status", "in_progress").eq("pause_reason", "connection").limit(1);
-      if (!frozen?.length && sessionBlocksSignIn(!!st?.exam_live, row.session_token ? row.session_seen_at : null)) {
-        await sb.from("exam_events").insert({ kind: "violation", student_code: row.student_code, round: st?.current_round ?? null, message: `Second sign-in blocked for ${row.full_name} — already signed in on another device` });
-        return { ok: false as const, error: "This student is already signed in on another device during the exam. Only one sign-in is allowed." };
-      }
-    }
+    // Verified Student ID + passcode always resumes smoothly; replacing session_token ensures only one active device at a time.
     const token = sameDevice && data.token ? data.token : crypto.randomUUID();
     await sb.from("registered_students").update({ session_token: token, session_seen_at: new Date().toISOString() }).eq("id", row.id);
     return { ok: true as const, student: { ...(await toPublic(row)), sessionToken: token } };

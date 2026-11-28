@@ -36,7 +36,7 @@ use the editor.
 - Name edits use the service-role-only `admin_edit_identity_name` RPC to update the roster and linked registration atomically, keeping sign-in names consistent.
 - All exam state (settings singleton, question banks, attempts, alerts, per-round results) lives in the database and is reached only via server functions in `src/lib/exam.functions.ts`; screens poll every few seconds instead of keeping local copies, so every role sees the same live state.
 - Director, IT Admin and Teacher access is checked server-side; `staff_credentials` rows override the env passcodes, and a per-teacher `teacher:<id>` row replaces the shared teacher password for that teacher only.
-- Students sign in with ID + result passcode (`afterWrongPin` lockout); exam calls re-prove ID + the latest session token; a second sign-in is refused while the exam is live and the first session is recently active, so one ID cannot be used on two devices.
+- Students sign in with ID + result passcode (caller-scoped `bh_pin_guard` lockout); verified sign-ins smoothly replace `session_token` so a student can always resume after a reload while keeping one active device at a time.
 - Exam attempts retain personal deadlines; scheduling controls new starts independently, and Director extensions update live deadlines atomically.
 - Submission scoring and attempt/result writes use the service-role-only atomic submission RPC; per-exam marks remain on attempts and subject summaries on round_results.
 - Round and alert removal archives or dismisses records instead of deleting marks; new rounds increment current_round and preserve earlier attempts.
@@ -56,7 +56,7 @@ use the editor.
 - `hidden_staff_roles` hides staff pages from the home page and menus via `visibleRoles`; staff links render only after the setting loads, and direct links keep working.
 - `apply_exam_schedule` closes when every admitted student finished (`auto_close`, sets `auto_completed`); in Auto its close time only ends new starts and the session stays live while attempts are in progress, so extended or paused students are never cut off.
 - Vercel only proxies to the Lovable-published site (`vercel.json`); Cloud server keys can't leave Lovable.
-- Class-test entry rules are enforced on attempt insertion by a database trigger, with teacher-owned server functions granting individual permissions; this prevents stale screens from bypassing the cutoff.
+- Class-test entry rules are enforced on attempt insertion by a database trigger, with configurable entry windows (or no cutoff) and teacher-owned server functions granting individual or bulk late-entry permissions.
 - Class-test Excel exports use only the authenticated teacher's returned tests and browser-generated workbooks; this keeps private marks scoped and avoids public download endpoints.
 - All `public` tables revoke `PUBLIC`, `anon` and `authenticated` privileges so only server functions (`service_role`) can reach credentials, session tokens and school records; teacher question figures stream directly on verified credentials without signed URLs.
 - Student registration requires an IT Admin-issued `exam_settings.registration_code`, valid JPEG input, and server-side `exam_events` (`kind='face_check'`) per-student/hourly quotas before calling paid face checks.

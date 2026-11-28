@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { teacherStream, canTakeStream, teacherCredentialKey, RESULT_PIN, hashResultPin, uploadSubjects, generateStaffPasscode, teacherBankRemovalError } from "@/lib/admin-rules";
-import { canStartExam, personalDeadline, readmitDeadline, remainingSeconds, DISCONNECT_GRACE_SEC, admittedToRoom, activeBankIds, HELP_COOLDOWN_SEC, helpMessage } from "@/lib/exam-timing";
+import { canStartExam, personalDeadline, readmitDeadline, remainingSeconds, DISCONNECT_GRACE_SEC, admittedToRoom, activeBankIds, HELP_COOLDOWN_SEC, helpMessage, shouldTouchSession, mergeAnswers } from "@/lib/exam-timing";
 import { normalizeName, requirePasscode, shouldBlock, shuffle, subjectsFor } from "@/lib/identity";
 import { FIGURE_PATH, MAX_GIVEN, MAX_OPTION, MAX_PASSAGE, MAX_TEXT, MAX_PAPER_PAGES, groupByPassage, bankSaveProblem } from "@/lib/paper";
 
@@ -95,13 +95,30 @@ export const adminResetStaffPassword = createServerFn({ method: "POST" })
   });
 
 /* ---------------- Public state (polled by every screen) ---------------- */
+let lastPublicMaintenance = 0;
+const PUBLIC_MAINTENANCE_MS = 10_000;
 export const getPublicState = createServerFn({ method: "GET" }).handler(async () => {
-  await settleAttempts();
-  const s = await settings();
-  // Tells Telegram bot users when the exam goes live, results are published or registration opens (once per change).
-  const { notifyStatusChanges } = await import("@/lib/telegram.server");
-  await notifyStatusChanges().catch((e) => console.error("Telegram notice failed", e));
   const sb = await admin();
+  const nowMs = Date.now();
+  const runMaintenance = nowMs - lastPublicMaintenance >= PUBLIC_MAINTENANCE_MS;
+  if (runMaintenance) lastPublicMaintenance = nowMs;
+  let s: Awaited<ReturnType<typeof settings>>;
+  if (runMaintenance) {
+    try {
+      await settleAttempts();
+      s = await settings();
+      // Tells Telegram bot users when the exam goes live, results are published or registration opens (once per change).
+      const { notifyStatusChanges } = await import("@/lib/telegram.server");
+      await notifyStatusChanges().catch((e) => console.error("Telegram notice failed", e));
+    } catch (e) {
+      lastPublicMaintenance = 0;
+      throw e;
+    }
+  } else {
+    const { data, error } = await sb.from("exam_settings").select("*").eq("id", 1).single();
+    if (error || !data) throw new Error("Could not load exam settings.");
+    s = data;
+  }
   let bank: { id: string; title: string; subject: string; count: number; marks: number; stream: string | null } | null = null;
   if (s.active_bank_id) {
     const { data } = await sb.from("question_banks").select("id,title,subject,questions,target_stream").eq("id", s.active_bank_id).maybeSingle();
@@ -380,11 +397,13 @@ export const teacherFigureUrls = createServerFn({ method: "POST" })
 /* ---------------- Student exam ---------------- */
 export async function student(who: { name: string; id: string; token: string }) {
   const sb = await admin();
-  const { data } = await sb.from("registered_students").select("id,student_code,full_name,stream,grade,section,face_verified,session_token").eq("student_code", who.id.toUpperCase()).maybeSingle();
+  const { data } = await sb.from("registered_students").select("id,student_code,full_name,stream,grade,section,face_verified,session_token,session_seen_at").eq("student_code", who.id.toUpperCase()).maybeSingle();
   if (!data || normalizeName(data.full_name) !== normalizeName(who.name)) throw new Error("Please sign in again.");
   if (!data.face_verified) throw new Error("Your face verification was reset. Please register again.");
   if (data.session_token !== who.token) throw new Error("You were signed in on another device. Please sign in again.");
-  await sb.from("registered_students").update({ session_seen_at: now() }).eq("id", data.id);
+  if (shouldTouchSession(data.session_seen_at)) {
+    await sb.from("registered_students").update({ session_seen_at: now() }).eq("id", data.id);
+  }
   return data;
 }
 const who = z.object({ name: z.string().min(1).max(100), id: z.string().min(3).max(30), token: z.string().uuid() });
@@ -471,6 +490,7 @@ export const studentSync = createServerFn({ method: "POST" })
     const left = attemptLeft(att);
     const paused = !!att.paused_at;
     if (att.status !== "in_progress") return { pauseReason: null, paused: false, status: att.status, violations: att.violations, secondsLeft: left, examLive: s.exam_live, timeUp: false };
+    const mergedAnswers = mergeAnswers(att.answers as Record<string, number>, data.answers);
     let violations = att.violations;
     if (data.violation && !paused) {
       violations += 1;
@@ -479,27 +499,27 @@ export const studentSync = createServerFn({ method: "POST" })
     if (data.connectionLost && !paused) {
       // The timer stops at the last moment the device was in contact, so no time is lost while it was offline.
       const frozenAt = att.last_seen_at ?? now();
-      await sb.from("exam_attempts").update({ answers: data.answers, current_question: data.current ?? att.current_question, paused_at: frozenAt, pause_reason: "connection", last_seen_at: now() }).eq("id",att.id).eq("status","in_progress");
+      await sb.from("exam_attempts").update({ answers: mergedAnswers, current_question: data.current ?? att.current_question, paused_at: frozenAt, pause_reason: "connection", last_seen_at: now() }).eq("id",att.id).eq("status","in_progress");
       await sb.from("exam_events").insert({ kind: "connection", student_code: st.student_code, round: s.current_round, message: `${st.full_name} lost connection or power — timer frozen, answers saved` });
       return { pauseReason: "connection", paused: true, status: "in_progress", violations, secondsLeft: secondsLeft(att.deadline_at, Date.parse(frozenAt)), examLive: s.exam_live, timeUp: false };
     }
     const timeUp = !paused && (left <= 0 || !s.exam_live);
     if (att.practice && ((!paused && data.submit) || timeUp)) {
       // Practice: mark it, show the answers straight away, then forget the attempt so nothing official changes and the student can retry.
-      const review = practiceReview(bank.questions, data.answers);
+      const review = practiceReview(bank.questions, mergedAnswers);
       await sb.from("exam_attempts").delete().eq("id", att.id);
       return { pauseReason: null, paused: false, status: "submitted", violations, secondsLeft: left, examLive: s.exam_live, timeUp, review };
     }
     if (shouldBlock(violations) && !att.practice) {
-      await finalize(att.id, data.answers, "blocked", violations);
+      await finalize(att.id, mergedAnswers, "blocked", violations);
       await sb.from("exam_events").insert({ kind: "blocked", student_code: st.student_code, round: s.current_round, message: `${st.full_name} was auto-submitted and blocked after ${violations} violations` });
       return { pauseReason: null, paused: false, status: "blocked", violations, secondsLeft: left, examLive: s.exam_live, timeUp: false };
     }
     if ((!paused && data.submit) || timeUp) {
-      await finalize(att.id, data.answers, "submitted", violations);
+      await finalize(att.id, mergedAnswers, "submitted", violations);
       return { pauseReason: null, paused: false, status: "submitted", violations, secondsLeft: left, examLive: s.exam_live, timeUp };
     }
-    const { error: saveError } = await sb.from("exam_attempts").update({ answers: data.answers, violations, last_seen_at: now(), ...(data.current !== undefined ? { current_question: data.current } : {}) }).eq("id", att.id).eq("status", "in_progress");
+    const { error: saveError } = await sb.from("exam_attempts").update({ answers: mergedAnswers, violations, last_seen_at: now(), ...(data.current !== undefined ? { current_question: data.current } : {}) }).eq("id", att.id).eq("status", "in_progress");
     if (saveError) throw new Error("Could not save answers. Please retry.");
     return { pauseReason: att.pause_reason, paused, status: "in_progress", violations, secondsLeft: left, examLive: s.exam_live, timeUp: false };
   });

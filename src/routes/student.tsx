@@ -8,7 +8,7 @@ import { LiveCamera } from "@/components/LiveCamera";
 import { MathText, PassageBox, FigureImage, GivenSheet } from "@/components/MathText";
 import { canTakeStream } from "@/lib/admin-rules";
 import { fmt } from "@/lib/identity";
-import { HEARTBEAT_MS, HELP_COOLDOWN_SEC } from "@/lib/exam-timing";
+import { HEARTBEAT_MS, HELP_COOLDOWN_SEC, ANSWER_SYNC_DEBOUNCE_MS, OFFLINE_FREEZE_DELAY_MS } from "@/lib/exam-timing";
 import { enterFullscreen, exitFullscreen, inFullscreen, fullscreenSupported, FULLSCREEN_EVENTS } from "@/lib/fullscreen";
 import { usePublicState } from "@/lib/live";
 import { studentExam, studentSync, studentFlag, studentResults, studentHelp } from "@/lib/exam.functions";
@@ -35,6 +35,21 @@ export const Route = createFileRoute("/student")({
 });
 
 const SESSION = "bhss-student-session";
+function readStoredSession(): { id: string; token?: string } | null {
+  try {
+    const raw = localStorage.getItem(SESSION) ?? sessionStorage.getItem(SESSION);
+    return raw ? (JSON.parse(raw) as { id: string; token?: string }) : null;
+  } catch { return null; }
+}
+function writeStoredSession(s: { id: string; token?: string }) {
+  const raw = JSON.stringify(s);
+  try { localStorage.setItem(SESSION, raw); } catch { /* ignore */ }
+  try { sessionStorage.setItem(SESSION, raw); } catch { /* ignore */ }
+}
+function clearStoredSession() {
+  try { localStorage.removeItem(SESSION); } catch { /* ignore */ }
+  try { sessionStorage.removeItem(SESSION); } catch { /* ignore */ }
+}
 
 function StudentPage() {
   const [student, setStudent] = useState<PublicStudent | null>(null);
@@ -47,7 +62,7 @@ function StudentPage() {
   const [notice, setNotice] = useState("");
   // The passcode typed at sign-in stays only in memory so "My results" opens without asking again.
   const [resultPin, setResultPin] = useState("");
-  const { data: pub } = usePublicState();
+  const { data: pub } = usePublicState(mode !== "exam");
   const regClosed = !pub || !pub.registrationOpen;
   // Exams never run inside Telegram's mini-app viewer: its fullscreen and focus behaviour would block students by mistake.
   const [inTelegram, setInTelegram] = useState(false);
@@ -61,27 +76,36 @@ function StudentPage() {
   }, []);
 
   useEffect(() => {
-    const raw = sessionStorage.getItem(SESSION);
-    if (!raw) return;
-    const { id, token } = JSON.parse(raw) as { id: string; token?: string };
-    login({ data: { id, token } }).then((r) => { if (r.ok) signIn(r.student); else { sessionStorage.removeItem(SESSION); setNotice(r.error); } }).catch(() => {});
+    const saved = readStoredSession();
+    if (!saved?.id) return;
+    login({ data: { id: saved.id, ...(saved.token ? { token: saved.token } : {}) } }).then((r) => { if (r.ok) signIn(r.student); else { clearStoredSession(); setNotice(r.error); } }).catch(() => {});
   }, []);
 
-  const signIn = (s: PublicStudent, pin = "") => { sessionStorage.setItem(SESSION, JSON.stringify({ id: s.id, token: s.sessionToken })); setStudent(s); if (pin) setResultPin(pin); setNotice(""); };
+  const activeTokenRef = useRef<string | undefined>(undefined);
+  const signIn = (s: PublicStudent, pin = "") => {
+    activeTokenRef.current = s.sessionToken;
+    writeStoredSession(s.sessionToken ? { id: s.id, token: s.sessionToken } : { id: s.id });
+    setStudent(s); if (pin) setResultPin(pin); setNotice("");
+  };
   const signOut = (msg = "") => {
     if (student?.sessionToken) leave({ data: { id: student.id, token: student.sessionToken } }).catch(() => {});
-    sessionStorage.removeItem(SESSION); setStudent(null); setResultPin(""); setMode("home"); setGate("choose"); setNotice(msg);
+    activeTokenRef.current = undefined;
+    clearStoredSession(); setStudent(null); setResultPin(""); setMode("home"); setGate("choose"); setNotice(msg);
   };
   useEffect(() => {
-    if (!student?.sessionToken) return;
+    if (!student?.sessionToken || mode === "exam") return;
     const token = student.sessionToken;
     const t = setInterval(() => {
       ping({ data: { id: student.id, token } }).then((r) => {
-        if (!r.active) { sessionStorage.removeItem(SESSION); setStudent(null); setMode("home"); setGate("choose"); setNotice("You were signed out because this ID was signed in on another device."); }
+        if (!r.active && activeTokenRef.current === token) {
+          activeTokenRef.current = undefined;
+          clearStoredSession(); setStudent(null); setMode("home"); setGate("login");
+          setNotice("This ID was signed in on another device. Sign in again with your passcode to continue here.");
+        }
       }).catch(() => {});
-    }, 20000);
+    }, 60000);
     return () => clearInterval(t);
-  }, [student?.id, student?.sessionToken]);
+  }, [student?.id, student?.sessionToken, mode]);
 
   if (!student) return (
     <Shell title="Student Portal" subtitle="Register once with a live photo, then sign in with your student ID and passcode" help>
@@ -107,7 +131,7 @@ function StudentPage() {
   );
   if (mode === "exam" && inTelegram) return <TelegramBlock onBack={() => { setMode("home"); setQuizId(null); }} />;
   if (mode === "exam" && webExamBlocked) return <AppRequiredBlock onBack={() => { setMode("home"); setQuizId(null); }} />;
-  if (mode === "exam") return <Exam student={student} quizId={quizId} onExit={() => { setMode("home"); setQuizId(null); }} />;
+  if (mode === "exam") return <Exam student={student} quizId={quizId} onExit={() => { setMode("home"); setQuizId(null); }} onReauth={() => { activeTokenRef.current = undefined; clearStoredSession(); setStudent(null); setMode("home"); setQuizId(null); setGate("login"); setNotice("Sign in again with your ID and passcode — your answers are saved on this device."); }} />;
   const first = student.name.split(" ")[0];
   return (
     <Shell title="Student Portal" subtitle="Burka Harbu Special Secondary School · Exam Portal" help>
@@ -216,11 +240,23 @@ function IosInstallCard({ onClose }: { onClose: () => void }) {
 function Login({ onLogin, onBack }: { onLogin: (s: PublicStudent, pin: string) => void; onBack: () => void }) {
   const login = useServerFn(loginStudent);
   const [pin, setPin] = useState(""); const [id, setId] = useState(""); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   return (
     <form className="tile mx-auto max-w-sm space-y-3 text-center" onSubmit={async (e) => {
-      e.preventDefault(); setErr(""); setBusy(true);
-      try { const r = await login({ data: { id, pin } }); r.ok ? onLogin(r.student, pin) : setErr(r.error); }
-      catch { setErr("Could not sign in. Check your details."); } finally { setBusy(false); }
+      e.preventDefault();
+      if (busyRef.current) return;
+      busyRef.current = true; setErr(""); setBusy(true);
+      try {
+        const saved = readStoredSession();
+        const reuseToken = saved?.token && saved.id.toUpperCase() === id.trim().toUpperCase() ? saved.token : undefined;
+        const r = await Promise.race([
+          login({ data: { id, pin, ...(reuseToken ? { token: reuseToken } : {}) } }),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error("TIMEOUT")), 15000)),
+        ]);
+        r.ok ? onLogin(r.student, pin) : setErr(r.error);
+      } catch (e) {
+        setErr(e instanceof Error && e.message === "TIMEOUT" ? "Connection took too long. Please tap Sign in again." : "Could not sign in. Check your internet and try again.");
+      } finally { busyRef.current = false; setBusy(false); }
     }}>
       <img src="/school-logo.jpg" alt="Burka Harbu logo" className="mx-auto h-20 w-20 rounded-full ring-2 ring-primary/40 glow" />
       <h2 className="font-semibold">Student sign in</h2>
@@ -345,7 +381,7 @@ type Paper = Awaited<ReturnType<typeof studentExam>>;
 type ExamAppBridge = { lock: () => void; unlock: () => void };
 const examApp = () => (typeof window === "undefined" ? undefined : (window as unknown as { BHExamApp?: ExamAppBridge }).BHExamApp);
 
-function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onExit: () => void; quizId?: string | null }) {
+function Exam({ student, onExit, onReauth, quizId = null }: { student: PublicStudent; onExit: () => void; onReauth: () => void; quizId?: string | null }) {
   const loadExam = useServerFn(studentExam);
   const syncExam = useServerFn(studentSync);
   const loadQuiz = useServerFn(studentQuizOpen);
@@ -364,8 +400,25 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
   const [paused, setPaused] = useState(false);
   const [pauseReason, setPauseReason] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  const [syncWarning, setSyncWarning] = useState(false);
+  const [sessionLost, setSessionLost] = useState(false);
   const offlineRef = useRef(false);
-  const goOffline = () => { offlineRef.current = true; setOffline(true); };
+  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const goOffline = () => {
+    if (isQuiz) { setSyncWarning(true); return; }
+    if (offlineRef.current || offlineTimerRef.current) return;
+    setSyncWarning(true);
+    offlineTimerRef.current = setTimeout(() => {
+      offlineTimerRef.current = null;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        offlineRef.current = true;
+        setOffline(true);
+      }
+    }, OFFLINE_FREEZE_DELAY_MS);
+  };
+  const clearOfflineTimer = () => {
+    if (offlineTimerRef.current) { clearTimeout(offlineTimerRef.current); offlineTimerRef.current = null; }
+  };
   const pausedRef = useRef(paused); pausedRef.current = paused;
   const [paper, setPaper] = useState<Paper | null>(null);
   const [err, setErr] = useState("");
@@ -388,6 +441,9 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
   const endedRef = useRef(ended); endedRef.current = ended;
   const idxRef = useRef(idx); idxRef.current = idx;
   const backupKey = useRef("");
+  const syncingRef = useRef(false);
+  const queuedRef = useRef<{ violation?: "fullscreen" | "focus"; submit?: boolean } | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Keep a copy on this device so a power cut or lost internet never loses answers or the current question.
   useEffect(() => {
     if (!backupKey.current || ended) return;
@@ -399,12 +455,28 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
 
   const push = async (extra: { violation?: "fullscreen" | "focus"; submit?: boolean } = {}) => {
     if (endedRef.current || !backupKey.current) return; // nothing to save until the exam has loaded
-    if (typeof navigator !== "undefined" && !navigator.onLine) { goOffline(); return; }
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      goOffline();
+      if (extra.submit) setErr("No internet connection. Wait for signal and tap Submit again — your answers are saved on this phone.");
+      return;
+    }
+    if (syncingRef.current) {
+      // Coalesce overlapping syncs so slow mobile data never queues a storm of duplicate requests.
+      const prev = queuedRef.current ?? {};
+      const next: { violation?: "fullscreen" | "focus"; submit?: boolean } = {};
+      const v = extra.violation ?? prev.violation;
+      if (v) next.violation = v;
+      if (extra.submit || prev.submit) next.submit = true;
+      queuedRef.current = next;
+      return;
+    }
+    syncingRef.current = true;
     try {
       // After any loss of contact the server freezes the timer at the last moment it heard from this device.
-      const wasOffline = offlineRef.current;
+      const wasOffline = !isQuiz && offlineRef.current;
       const r = await sync({ data: { ...who, answers: answersRef.current, current: idxRef.current, ...(wasOffline ? { connectionLost: true } : extra) } });
-      setErr(""); offlineRef.current = false; setOffline(false);
+      clearOfflineTimer();
+      setErr(""); setSyncWarning(false); setSessionLost(false); offlineRef.current = false; setOffline(false);
       setViolations(r.violations); setLeft(r.secondsLeft); setPaused(r.paused); setPauseReason(r.pauseReason);
       if ("review" in r && r.review) setReview(r.review);
       if (r.status !== "in_progress") {
@@ -413,17 +485,37 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
         exitFullscreen(); // the exam is over, so leaving fullscreen is no longer a violation
       }
     } catch (e) {
-      const net = !navigator.onLine || !(e instanceof Error) || /fetch|network|load failed|failed to|timeout|aborted/i.test(e.message);
-      if (net) goOffline();
-      setErr(net ? "" : e instanceof Error ? e.message : "Could not save.");
+      const msg = e instanceof Error ? e.message : "";
+      if (/another device|sign in again/i.test(msg)) {
+        setSessionLost(true);
+        setErr("Your session was opened elsewhere. Your answers are saved on this device.");
+      } else {
+        const net = !navigator.onLine || !(e instanceof Error) || /fetch|network|load failed|failed to|timeout|aborted/i.test(msg);
+        if (net) {
+          setSyncWarning(true);
+          if (!navigator.onLine) goOffline();
+          if (extra.submit) setErr("Connection slow — could not submit yet. Tap Submit again once signal returns.");
+        } else {
+          setErr(msg || "Could not save.");
+        }
+      }
+    } finally {
+      syncingRef.current = false;
+      const next = queuedRef.current;
+      queuedRef.current = null;
+      if (next && !endedRef.current) void push(next);
     }
+  };
+  const scheduleAnswerSync = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { debounceRef.current = null; void push(); }, ANSWER_SYNC_DEBOUNCE_MS);
   };
   // Detect power/internet loss the instant the browser reports it, not after the next save.
   useEffect(() => {
     const down = () => goOffline();
-    const up = () => { push(); };
+    const up = () => { clearOfflineTimer(); void push(); };
     window.addEventListener("offline", down); window.addEventListener("online", up);
-    return () => { window.removeEventListener("offline", down); window.removeEventListener("online", up); };
+    return () => { clearOfflineTimer(); if (debounceRef.current) clearTimeout(debounceRef.current); window.removeEventListener("offline", down); window.removeEventListener("online", up); };
   }, []);
 
   const openExam = () => load({ data: who }).then((p) => {
@@ -434,9 +526,12 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
       const startAt = Math.min(Math.max(0, saved.idx ?? p.currentQuestion ?? 0), Math.max(0, p.paper.length - 1));
       // Fetch every picture now so they still show if the internet drops later in the exam.
       p.paper.forEach((q) => { if (q.figureUrl) { const img = new Image(); img.src = q.figureUrl; } });
-      setPaper(p); setAnswers({ ...p.answers, ...(saved.answers ?? {}) }); setIdx(startAt); setViolations(p.violations); setLeft(p.secondsLeft); setPaused(p.paused); setPauseReason(p.pauseReason);
+      const merged = { ...p.answers, ...(saved.answers ?? {}) };
+      const hasLocalOnly = Object.entries(saved.answers ?? {}).some(([k, v]) => p.answers[k] !== v);
+      setPaper(p); setAnswers(merged); answersRef.current = merged; setIdx(startAt); setViolations(p.violations); setLeft(p.secondsLeft); setPaused(p.paused); setPauseReason(p.pauseReason);
       const end = p.attemptStatus === "blocked" ? "blocked" : p.attemptStatus === "submitted" ? "submitted" : null;
       endedRef.current = end; setEnded(end);
+      if (!end && hasLocalOnly) setTimeout(() => { void push(); }, 400);
       return p;
     });
   useEffect(() => { openExam().catch((e) => setErr(e instanceof Error ? e.message : "Could not load the exam.")); }, []);
@@ -447,7 +542,13 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
     return () => clearInterval(t);
   }, [ended]);
   useEffect(() => { const t = setInterval(() => { if (!pausedRef.current && !offlineRef.current) setLeft((l) => Math.max(0, l - 1)); }, 1000); return () => clearInterval(t); }, []);
-  useEffect(() => { const t = setInterval(() => push(), HEARTBEAT_MS); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    // Stagger background heartbeats slightly so 100+ phones don't hit the server at the exact same instant.
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const jitter = Math.floor(Math.random() * 3000);
+    const start = setTimeout(() => { timer = setInterval(() => { void push(); }, HEARTBEAT_MS); }, jitter);
+    return () => { clearTimeout(start); if (timer) clearInterval(timer); };
+  }, []);
   useEffect(() => { if (paper && left === 0 && !ended && !offline) push(); }, [left, paper]);
   useEffect(() => {
     let last = 0;
@@ -571,6 +672,8 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
           <Btn variant="accent" onClick={() => setAskSubmit(true)}>Submit</Btn>
         </div>
         {help === "sent" && <p role="status" className="border-t border-border bg-accent/10 px-3 py-1.5 text-center text-xs text-accent">The Director has your name and ID and is coming to help. Stay in your seat — your time keeps running.</p>}
+        {syncWarning && !offline && !paused && <p role="status" className="border-t border-border bg-warning/10 px-3 py-1.5 text-center text-xs text-warning">Slow or offline connection — keep answering, your choices are saved on this device and will sync automatically.</p>}
+        {sessionLost && <div role="alert" className="flex flex-wrap items-center justify-center gap-2 border-t border-border bg-destructive/10 px-3 py-1.5 text-xs text-destructive"><span>Your session changed. Your answers are safely stored on this device.</span><Btn variant="ghost" className="px-2 py-0.5 text-xs" onClick={onReauth}>Sign in again</Btn></div>}
       </div>
       {paused && (
         <div role="dialog" aria-modal="true" aria-labelledby="paused-title" className="fixed inset-0 z-40 flex items-center justify-center bg-background/90 p-4 backdrop-blur-sm">
@@ -645,7 +748,7 @@ function Exam({ student, onExit, quizId = null }: { student: PublicStudent; onEx
             {cur.choices.map((c, k) => {
               const sel = answers[cur.id] === c.value;
               return (
-                <button key={c.value} onClick={() => setAnswers({ ...answers, [cur.id]: c.value })} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition sm:p-4 ${sel ? "border-primary bg-primary/10 glow" : "border-border hover:border-primary/50"}`}>
+                <button key={c.value} onClick={() => { const next = { ...answers, [cur.id]: c.value }; answersRef.current = next; setAnswers(next); scheduleAnswerSync(); }} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition sm:p-4 ${sel ? "border-primary bg-primary/10 glow" : "border-border hover:border-primary/50"}`}>
                   <span className={`flex h-8 w-8 items-center justify-center rounded-lg font-mono text-sm ${sel ? "bg-primary text-primary-foreground" : "bg-muted"}`}>{"ABCD"[k]}</span>
                   <span className="min-w-0 flex-1"><MathText text={c.label ?? ""} /></span>
                 </button>
