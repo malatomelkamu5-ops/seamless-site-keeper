@@ -89,18 +89,44 @@ export function afterWrongPin(failures: number, time = Date.now()) {
 }
 
 const REG_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function randomCodeChars(length: number) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => REG_ALPHABET[b & 31]).join("");
+}
 /** Normalizes a registration access code by stripping dashes/spaces and uppercasing. */
 export const normalizeRegistrationCode = (code: string) => code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
 /** Generates an 8-character cryptographic registration code formatted as XXXX-XXXX. */
 export function generateRegistrationCode() {
-  const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
-  const raw = Array.from(bytes, (b) => REG_ALPHABET[b % REG_ALPHABET.length]).join("");
+  const raw = randomCodeChars(8);
   return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+/** Generates a cryptographic staff reset password using Web Crypto randomness. */
+export function generateStaffPasscode(role: "director" | "teacher") {
+  const raw = randomCodeChars(8);
+  return `BH-${role === "director" ? "DIR" : "TCH"}-${raw.slice(0, 4)}-${raw.slice(4)}`;
 }
 /** True only when a non-empty server registration code is configured and matches the caller's input. */
 export function matchesRegistrationCode(provided: string, expected: string | null | undefined) {
   const exp = expected ? normalizeRegistrationCode(expected) : "";
   const got = normalizeRegistrationCode(provided);
   return exp.length >= 6 && got === exp;
+}
+
+/** Server-side quotas capping paid AI face checks per student and school-wide. */
+export const FACE_CHECK_STUDENT_LIMIT = 3;
+export const FACE_CHECK_STUDENT_WINDOW_MS = 30 * 60 * 1000;
+export const FACE_CHECK_SCHOOL_LIMIT = 30;
+export const FACE_CHECK_SCHOOL_WINDOW_MS = 60 * 60 * 1000;
+export function faceCheckQuotaError(studentAttempts: number, schoolAttempts: number): string | null {
+  if (studentAttempts >= FACE_CHECK_STUDENT_LIMIT) return "Too many face verification attempts for this student. Please wait 30 minutes or ask IT Admin.";
+  if (schoolAttempts >= FACE_CHECK_SCHOOL_LIMIT) return "Face verification is temporarily paused because of high activity. Please wait and try again, or ask IT Admin.";
+  return null;
+}
+
+/** Only the owning teacher may remove a non-live bank (or clear its active slot). */
+export function teacherBankRemovalError(ownerId: string | null | undefined, callerId: string, isActive: boolean, examLive: boolean): string | null {
+  if (!ownerId || ownerId !== callerId) return "Could not remove the question bank.";
+  if (isActive && examLive) return "This paper is live right now and cannot be removed.";
+  return null;
 }

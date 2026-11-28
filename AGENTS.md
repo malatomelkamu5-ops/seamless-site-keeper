@@ -59,4 +59,5 @@ use the editor.
 - Class-test entry rules are enforced on attempt insertion by a database trigger, with teacher-owned server functions granting individual permissions; this prevents stale screens from bypassing the cutoff.
 - Class-test Excel exports use only the authenticated teacher's returned tests and browser-generated workbooks; this keeps private marks scoped and avoids public download endpoints.
 - All `public` tables revoke `PUBLIC`, `anon` and `authenticated` privileges so only server functions (`service_role`) can reach credentials, session tokens and school records; teacher question figures stream directly on verified credentials without signed URLs.
-- Student registration requires an IT Admin-issued `exam_settings.registration_code` (with no separate public roster-lookup endpoint) so outsiders cannot probe enrollment or trigger paid face checks.
+- Student registration requires an IT Admin-issued `exam_settings.registration_code`, valid JPEG input, and server-side `exam_events` (`kind='face_check'`) per-student/hourly quotas before calling paid face checks.
+- Staff password resets use Web Crypto randomness (`generateStaffPasscode`), and `teacherRemoveBank` verifies bank ownership and archives the bank before clearing shared `exam_settings` references.

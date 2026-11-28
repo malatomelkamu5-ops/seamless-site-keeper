@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { teacherStream, canTakeStream, teacherCredentialKey, RESULT_PIN, hashResultPin, uploadSubjects } from "@/lib/admin-rules";
+import { teacherStream, canTakeStream, teacherCredentialKey, RESULT_PIN, hashResultPin, uploadSubjects, generateStaffPasscode, teacherBankRemovalError } from "@/lib/admin-rules";
 import { canStartExam, personalDeadline, readmitDeadline, remainingSeconds, DISCONNECT_GRACE_SEC, admittedToRoom, activeBankIds, HELP_COOLDOWN_SEC, helpMessage } from "@/lib/exam-timing";
 import { normalizeName, requirePasscode, shouldBlock, shuffle, subjectsFor } from "@/lib/identity";
 import { FIGURE_PATH, MAX_GIVEN, MAX_OPTION, MAX_PASSAGE, MAX_TEXT, MAX_PAPER_PAGES, groupByPassage, bankSaveProblem } from "@/lib/paper";
@@ -90,7 +90,7 @@ export const adminResetStaffPassword = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     requirePasscode(data.passcode, process.env["IT_ADMIN_PASSCODE"], "IT Admin");
     const sb = await admin();
-    const code = `BH-${data.role === "director" ? "DIR" : "TCH"}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const code = generateStaffPasscode(data.role);
     if (data.role === "teacher") {
       if (!data.teacherId) throw new Error("Choose the teacher whose password should be reset.");
       const { data: t } = await sb.from("school_roster").select("id").eq("id", data.teacherId).eq("kind", "teacher").maybeSingle();
@@ -653,12 +653,21 @@ export const teacherRemoveBank = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const t = await teacher(data.passcode, data.teacherId);
     const sb = await admin();
+    const { data: bank } = await sb.from("question_banks").select("id,teacher_id").eq("id", data.id).eq("teacher_id", t.id).neq("status", "archived").maybeSingle();
     const s = await settings();
-    if (activeBankIds(s).includes(data.id) && s.exam_live) throw new Error("This paper is live right now and cannot be removed.");
-    if (activeBankIds(s).includes(data.id)) await sb.from("exam_settings").update({ ...(s.social_bank_id === data.id ? { social_bank_id: null } : { active_bank_id: null }), auto_schedule: false }).eq("id", 1);
+    const isActive = activeBankIds(s).includes(data.id);
+    const err = teacherBankRemovalError(bank?.teacher_id, t.id, isActive, s.exam_live);
+    if (err || !bank) throw new Error(err ?? "Could not remove the question bank.");
     // Archived, not deleted: saved student marks still reference the paper.
-    const { error, data: row } = await sb.from("question_banks").update({ status: "archived", updated_at: now() }).eq("id", data.id).eq("teacher_id", t.id).select("id").maybeSingle();
+    const { error, data: row } = await sb.from("question_banks").update({ status: "archived", updated_at: now() }).eq("id", bank.id).eq("teacher_id", t.id).select("id").maybeSingle();
     if (error || !row) throw new Error("Could not remove the question bank.");
+    if (isActive) {
+      await sb.from("exam_settings").update({
+        ...(s.active_bank_id === row.id ? { active_bank_id: null } : {}),
+        ...(s.social_bank_id === row.id ? { social_bank_id: null } : {}),
+        auto_schedule: false,
+      }).eq("id", 1);
+    }
     return { ok: true };
   });
 

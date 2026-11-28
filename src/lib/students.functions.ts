@@ -4,7 +4,7 @@ import { normalizeName, requireRosterName, requireAdminPin } from "@/lib/identit
 import type { TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 export { normalizeName } from "@/lib/identity";
 
-import { canReplaceFace, teacherRowSchema, teacherDetailsSchema, studentDetailsSchema, academicYear, sessionBlocksSignIn, teacherCredentialKey, RESULT_PIN, hashResultPin, pinLocked, afterWrongPin, generateRegistrationCode, matchesRegistrationCode } from "@/lib/admin-rules";
+import { canReplaceFace, teacherRowSchema, teacherDetailsSchema, studentDetailsSchema, academicYear, sessionBlocksSignIn, teacherCredentialKey, RESULT_PIN, hashResultPin, pinLocked, afterWrongPin, generateRegistrationCode, matchesRegistrationCode, FACE_CHECK_STUDENT_WINDOW_MS, FACE_CHECK_SCHOOL_WINDOW_MS, faceCheckQuotaError } from "@/lib/admin-rules";
 
 const BUCKET = "student-photos";
 
@@ -96,6 +96,18 @@ export const registerStudent = createServerFn({ method: "POST" })
     if (!encoded) throw new Error("Please retake your photo.");
     const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
     if (bytes.length < 5000) throw new Error("Photo is too small. Please retake it.");
+    if (bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error("Please retake your photo.");
+
+    // Enforce per-student and school-wide quotas before calling the metered AI face check.
+    const studentSince = new Date(Date.now() - FACE_CHECK_STUDENT_WINDOW_MS).toISOString();
+    const schoolSince = new Date(Date.now() - FACE_CHECK_SCHOOL_WINDOW_MS).toISOString();
+    const [studentChecks, schoolChecks] = await Promise.all([
+      sb.from("exam_events").select("id", { count: "exact", head: true }).eq("kind", "face_check").eq("student_code", record.id).gte("created_at", studentSince),
+      sb.from("exam_events").select("id", { count: "exact", head: true }).eq("kind", "face_check").gte("created_at", schoolSince),
+    ]);
+    const quotaErr = faceCheckQuotaError(studentChecks.count ?? 0, schoolChecks.count ?? 0);
+    if (quotaErr) throw new Error(quotaErr);
+    await sb.from("exam_events").insert({ kind: "face_check", student_code: record.id, round: null, message: "Registration face verification" });
 
     const { checkUncovered, checkNotDuplicate } = await import("@/lib/face.server");
     await checkUncovered(data.photo);
