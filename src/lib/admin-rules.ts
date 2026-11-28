@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeName } from "@/lib/identity";
 export function teacherStream(stream: string, id: string) {
   return stream === "Social Science" || (stream === "Both" && id.startsWith("T-SOC-")) ? "Social Science" : "Natural Science";
 }
@@ -164,4 +165,12 @@ export function teacherBankRemovalError(ownerId: string | null | undefined, call
   if (!ownerId || ownerId !== callerId) return "Could not remove the question bank.";
   if (isActive && examLive) return "This paper is live right now and cannot be removed.";
   return null;
+}
+
+/** Parses teacher sign-in input as either a Teacher ID (T-NAT-## / T-SOC-##) or a normalized full name. */
+export const TEACHER_ID_PATTERN = /^T-(?:NAT|SOC)-\d{1,4}$/i;
+export function normalizeTeacherLookup(input: string): { kind: "id" | "name"; value: string } {
+  const trimmed = input.trim();
+  if (TEACHER_ID_PATTERN.test(trimmed)) return { kind: "id", value: trimmed.toUpperCase() };
+  return { kind: "name", value: normalizeName(trimmed) };
 }

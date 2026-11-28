@@ -32,6 +32,51 @@ export const pinLockMinutesLeft = (lockedUntil: string | null, now = Date.now())
   return ms > 0 ? Math.ceil(ms / 60_000) : 0;
 };
 
+/** Server-side quotas capping IT Admin outbound Telegram messages to prevent spam or abuse. */
+export const BROADCAST_COOLDOWN_MS = 60_000;
+export const BROADCAST_HOURLY_LIMIT = 5;
+export const BROADCAST_DAILY_LIMIT = 15;
+export const BROADCAST_DUPLICATE_WINDOW_MS = 10 * 60_000;
+export function broadcastQuotaError(
+  recent: { created_at: string; audience: string; message: string }[],
+  audience: string,
+  message: string,
+  now = Date.now(),
+): string | null {
+  const clean = message.trim();
+  const sorted = [...recent].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const latest = sorted[0];
+  if (latest && now - Date.parse(latest.created_at) < BROADCAST_COOLDOWN_MS) {
+    return "Please wait 1 minute between Telegram announcements.";
+  }
+  if (sorted.some((b) => b.audience === audience && b.message.trim() === clean && now - Date.parse(b.created_at) < BROADCAST_DUPLICATE_WINDOW_MS)) {
+    return "This same announcement was already sent to that group a few minutes ago.";
+  }
+  const lastHour = sorted.filter((b) => now - Date.parse(b.created_at) < 3_600_000).length;
+  if (lastHour >= BROADCAST_HOURLY_LIMIT) {
+    return "Hourly announcement limit reached (5 per hour). Please try again later.";
+  }
+  const lastDay = sorted.filter((b) => now - Date.parse(b.created_at) < 86_400_000).length;
+  if (lastDay >= BROADCAST_DAILY_LIMIT) {
+    return "Daily announcement limit reached (15 per 24 hours). Please try again tomorrow.";
+  }
+  return null;
+}
+
+export const REPLY_PER_CHAT_LIMIT = 5;
+export const REPLY_PER_CHAT_WINDOW_MS = 15 * 60_000;
+export const REPLY_SCHOOL_HOURLY_LIMIT = 30;
+export const REPLY_SCHOOL_WINDOW_MS = 3_600_000;
+export function directReplyQuotaError(chatReplies: number, schoolReplies: number): string | null {
+  if (chatReplies >= REPLY_PER_CHAT_LIMIT) {
+    return "Too many messages sent to this chat recently. Please wait 15 minutes.";
+  }
+  if (schoolReplies >= REPLY_SCHOOL_HOURLY_LIMIT) {
+    return "Hourly Telegram reply limit reached (30 per hour). Please try again later.";
+  }
+  return null;
+}
+
 /** Who an IT Admin message goes to. */
 export const AUDIENCES = [
   { value: "all", label: "Everyone who started the bot" },

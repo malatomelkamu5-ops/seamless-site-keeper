@@ -8,7 +8,7 @@ import { hasMath } from "@/lib/math-text";
 import { PAPER_ACCEPT, MAX_PAPER_BYTES, MAX_GIVEN, type ScannedQuestion } from "@/lib/paper";
 import { Shell, Panel, Btn } from "@/components/Shell";
 import { TeacherQuizzes } from "@/components/TeacherQuizzes";
-import { listTeachers, teacherDashboard, teacherSaveBank, teacherRemoveBank, teacherRemoveFlag, teacherChangePassword, teacherMarks, teacherScanPaper, teacherUploadFigure, teacherFigureUrls, type Question } from "@/lib/exam.functions";
+import { teacherDashboard, teacherSaveBank, teacherRemoveBank, teacherRemoveFlag, teacherChangePassword, teacherMarks, teacherScanPaper, teacherUploadFigure, teacherFigureUrls, type Question } from "@/lib/exam.functions";
 
 export const Route = createFileRoute("/teacher")({
   head: () => ({
@@ -29,10 +29,7 @@ type BankRow = { id: string; subject: string; title: string; status: string; que
 const toDraft = (b: BankRow): Draft => ({ id: b.id, subject: b.subject, title: b.title, status: b.status as Draft["status"], questions: b.questions, given: b.given ?? "" });
 
 function Teacher() {
-  const list = useServerFn(listTeachers);
   const dash = useServerFn(teacherDashboard);
-  const { data: teachers = [] } = useQuery({ queryKey: ["teachers"], queryFn: () => list() });
-  const [stream, setStream] = useState("");
   const [tid, setTid] = useState("");
   const [pw, setPw] = useState("");
   const [auth, setAuth] = useState<{ tid: string; pw: string } | null>(null);
@@ -41,23 +38,15 @@ function Teacher() {
     <Shell title="Teacher Portal" subtitle="Subject specialist workspace" help>
       <form className="tile mx-auto max-w-sm space-y-3" onSubmit={async (e) => {
         e.preventDefault(); setBusy(true); setErr("");
-        try { await dash({ data: { passcode: pw, teacherId: tid } }); setAuth({ tid, pw }); setPw(""); }
+        try { const res = await dash({ data: { passcode: pw, teacherId: tid.trim() } }); setAuth({ tid: res.teacher.id, pw }); setPw(""); }
         catch (e) { setErr(e instanceof Error ? e.message : "Could not sign in."); } finally { setBusy(false); }
       }}>
         <img src="/school-logo.jpg" alt="Burka Harbu logo" className="mx-auto h-20 w-20 rounded-full ring-2 ring-primary/40 glow" />
         <h2 className="text-center font-semibold">Teacher sign in</h2>
-        <select className="field" value={stream} onChange={(e) => { setStream(e.target.value); setTid(""); }} required aria-label="Stream">
-          <option value="">First, choose your stream</option>
-          <option>Natural Science</option>
-          <option>Social Science</option>
-        </select>
-        <select className="field" value={tid} onChange={(e) => setTid(e.target.value)} required disabled={!stream} aria-label="Teacher">
-          <option value="">{stream ? "Then, select your name" : "Choose your stream first"}</option>
-          {teachers.filter((t) => t.id.startsWith(stream === "Social Science" ? "T-SOC" : "T-NAT")).map((t) => <option key={t.id} value={t.id}>{t.full_name} — {t.subjects.join(", ")}</option>)}
-        </select>
-        <input type="password" className="field" placeholder="Teacher password" value={pw} onChange={(e) => setPw(e.target.value)} required />
+        <input className="field" placeholder="Teacher ID (e.g. T-NAT-04) or full name" aria-label="Teacher ID or full name" value={tid} onChange={(e) => setTid(e.target.value)} maxLength={100} required />
+        <input type="password" className="field" placeholder="Teacher password" aria-label="Teacher password" value={pw} onChange={(e) => setPw(e.target.value)} required />
         {err && <p role="alert" className="text-xs text-destructive">{err}</p>}
-        <Btn className="w-full" disabled={busy || !stream || !tid || !pw}>{busy ? "Checking…" : "Sign in"}</Btn>
+        <Btn className="w-full" disabled={busy || !tid.trim() || !pw}>{busy ? "Checking…" : "Sign in"}</Btn>
       </form>
     </Shell>
   );

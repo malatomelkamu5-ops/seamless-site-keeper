@@ -1,21 +1,56 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireAdminPin } from "@/lib/identity";
-import { AUDIENCES, webhookUrlFor, escapeHtml, isVerifiedTelegramLink } from "@/lib/telegram-bot";
+import { afterWrongPin, pinLocked, signPinGuard, verifyPinGuard } from "@/lib/admin-rules";
+import {
+  AUDIENCES, webhookUrlFor, escapeHtml, isVerifiedTelegramLink,
+  broadcastQuotaError, directReplyQuotaError, REPLY_PER_CHAT_WINDOW_MS, REPLY_SCHOOL_WINDOW_MS,
+} from "@/lib/telegram-bot";
 
 const pass = z.string().min(1).max(200);
-function checkPasscode(p: string) { requireAdminPin(p, process.env["IT_ADMIN_PASSCODE"]); }
+const ADMIN_GUARD_COOKIE = "bh_admin_guard";
+
+/** Verifies IT Admin PIN with caller-scoped signed lockout throttling so wrong guesses are blocked per caller. */
+async function checkPasscode(p: string) {
+  const { getCookie, setCookie, deleteCookie, getRequestUrl } = await import("@tanstack/react-start/server");
+  const guardSecret = process.env["SUPABASE_SERVICE_ROLE_KEY"] ?? process.env["IT_ADMIN_PASSCODE"] ?? "bh-admin-guard";
+  const secureCookie = getRequestUrl().protocol === "https:";
+  const guard = await verifyPinGuard(getCookie(ADMIN_GUARD_COOKIE), guardSecret);
+  if (pinLocked(guard.pin_locked_until)) throw new Error("Too many wrong IT Admin PIN tries. Wait 15 minutes and try again.");
+  try {
+    requireAdminPin(p, process.env["IT_ADMIN_PASSCODE"]);
+  } catch (e) {
+    const next = afterWrongPin(guard.pin_failures);
+    setCookie(ADMIN_GUARD_COOKIE, await signPinGuard(next, guardSecret), { httpOnly: true, sameSite: "lax", secure: secureCookie, path: "/", maxAge: 15 * 60 });
+    throw e;
+  }
+  if (guard.pin_failures || guard.pin_locked_until) deleteCookie(ADMIN_GUARD_COOKIE, { path: "/" });
+}
+
 async function admin() {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   return supabaseAdmin;
 }
 const bot = () => import("@/lib/telegram.server");
 
+/** Enforces per-chat and school-wide hourly limits on IT Admin direct bot messages. */
+async function enforceDirectReplyQuota(chatId: number) {
+  const sb = await admin();
+  const chatSince = new Date(Date.now() - REPLY_PER_CHAT_WINDOW_MS).toISOString();
+  const schoolSince = new Date(Date.now() - REPLY_SCHOOL_WINDOW_MS).toISOString();
+  const [chatRes, schoolRes] = await Promise.all([
+    sb.from("telegram_messages").select("id", { count: "exact", head: true }).eq("direction", "out").eq("kind", "reply").eq("chat_id", chatId).gte("created_at", chatSince),
+    sb.from("telegram_messages").select("id", { count: "exact", head: true }).eq("direction", "out").eq("kind", "reply").gte("created_at", schoolSince),
+  ]);
+  const err = directReplyQuotaError(chatRes.count ?? 0, schoolRes.count ?? 0);
+  if (err) throw new Error(err);
+}
+
 /** Everything the IT Admin bot page shows; polled every few seconds for the live counters. */
 export const adminBotDashboard = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, origin: z.string().url().max(300) }).parse(d))
   .handler(async ({ data }) => {
-    checkPasscode(data.passcode);
+    await checkPasscode(data.passcode);
     const sb = await admin();
     const { tg, notifyStatusChanges } = await bot();
     await notifyStatusChanges().catch((e) => console.error("Status notice failed", e));
@@ -80,7 +115,7 @@ const settingsSchema = z.object({
 export const adminBotSaveSettings = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, settings: settingsSchema }).parse(d))
   .handler(async ({ data }) => {
-    checkPasscode(data.passcode);
+    await checkPasscode(data.passcode);
     const sb = await admin();
     const { error } = await sb.from("telegram_settings").update({ ...data.settings, updated_at: new Date().toISOString() }).eq("id", 1);
     if (error) throw new Error("Could not save the bot settings.");
@@ -91,7 +126,7 @@ export const adminBotSaveSettings = createServerFn({ method: "POST" })
 export const adminBotConnect = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, origin: z.string().url().max(300) }).parse(d))
   .handler(async ({ data }) => {
-    checkPasscode(data.passcode);
+    await checkPasscode(data.passcode);
     const { tg, webhookSecret } = await bot();
     const sb = await admin();
     const { data: s } = await sb.from("telegram_settings").select("portal_url").eq("id", 1).single();
@@ -112,7 +147,19 @@ export const adminBotConnect = createServerFn({ method: "POST" })
 export const adminBotBroadcast = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, audience: z.enum(AUDIENCES.map((a) => a.value) as [string, ...string[]]), message: z.string().trim().min(1).max(3500) }).parse(d))
   .handler(async ({ data }) => {
-    checkPasscode(data.passcode);
+    await checkPasscode(data.passcode);
+    const sb = await admin();
+    const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
+    const { data: recent, error: recentErr } = await sb
+      .from("telegram_broadcasts")
+      .select("created_at,audience,message")
+      .eq("kind", "manual")
+      .gte("created_at", dayAgo)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (recentErr) throw new Error("Could not verify announcement limits.");
+    const quotaErr = broadcastQuotaError(recent ?? [], data.audience, data.message);
+    if (quotaErr) throw new Error(quotaErr);
     const { broadcast } = await bot();
     return broadcast(data.audience as (typeof AUDIENCES)[number]["value"], `📢 <b>Burka Harbu Exam Portal</b>\n\n${escapeHtml(data.message)}`, undefined, "manual", data.message);
   });
@@ -121,18 +168,39 @@ export const adminBotBroadcast = createServerFn({ method: "POST" })
 export const adminBotSendTo = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, chatId: z.number().int(), message: z.string().trim().min(1).max(3500), helpId: z.string().uuid().optional() }).parse(d))
   .handler(async ({ data }) => {
-    checkPasscode(data.passcode);
+    await checkPasscode(data.passcode);
+    const sb = await admin();
+    const { data: target, error: targetErr } = await sb
+      .from("telegram_users")
+      .select("chat_id,blocked")
+      .eq("chat_id", data.chatId)
+      .maybeSingle();
+    if (targetErr || !target) throw new Error("This Telegram chat is not registered with the school bot.");
+    if (target.blocked) throw new Error("This user has blocked the bot and cannot receive messages.");
+    if (data.helpId) {
+      const { data: helpRow } = await sb
+        .from("telegram_messages")
+        .select("id")
+        .eq("id", data.helpId)
+        .eq("kind", "help")
+        .eq("chat_id", target.chat_id)
+        .maybeSingle();
+      if (!helpRow) throw new Error("Help request not found for this chat.");
+    }
+    await enforceDirectReplyQuota(target.chat_id);
     const { send } = await bot();
-    const ok = await send(data.chatId, `💬 <b>IT Admin:</b>\n${escapeHtml(data.message)}`, undefined, "reply");
+    const ok = await send(target.chat_id, `💬 <b>IT Admin:</b>\n${escapeHtml(data.message)}`, undefined, "reply");
     if (!ok) throw new Error("Telegram did not deliver this message. The student may have blocked the bot.");
-    if (data.helpId) { const sb = await admin(); await sb.from("telegram_messages").update({ handled_at: new Date().toISOString() }).eq("id", data.helpId); }
+    if (data.helpId) {
+      await sb.from("telegram_messages").update({ handled_at: new Date().toISOString() }).eq("id", data.helpId).eq("chat_id", target.chat_id);
+    }
     return { ok: true };
   });
 
 export const adminBotHelpDone = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, helpId: z.string().uuid() }).parse(d))
   .handler(async ({ data }) => {
-    checkPasscode(data.passcode);
+    await checkPasscode(data.passcode);
     const sb = await admin();
     const { error } = await sb.from("telegram_messages").update({ handled_at: new Date().toISOString() }).eq("id", data.helpId).eq("kind", "help");
     if (error) throw new Error("Could not update this help request.");
@@ -143,11 +211,21 @@ export const adminBotHelpDone = createServerFn({ method: "POST" })
 export const adminBotUnlink = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, chatId: z.number().int() }).parse(d))
   .handler(async ({ data }) => {
-    checkPasscode(data.passcode);
+    await checkPasscode(data.passcode);
     const sb = await admin();
-    const { error } = await sb.from("telegram_users").update({ student_code: null, id_confirmed: false, state: "await_login_id", linked_at: null, state_data: {} }).eq("chat_id", data.chatId);
+    const { data: unlinked, error } = await sb
+      .from("telegram_users")
+      .update({ student_code: null, id_confirmed: false, state: "await_login_id", linked_at: null, state_data: {} })
+      .eq("chat_id", data.chatId)
+      .not("student_code", "is", null)
+      .select("chat_id,blocked")
+      .maybeSingle();
     if (error) throw new Error("Could not sign this chat out.");
-    const { send } = await bot();
-    await send(data.chatId, "🚪 IT Admin signed you out of the bot. Send your Student ID to sign in again.", { remove_keyboard: true });
+    if (!unlinked) throw new Error("This Telegram chat is not linked to a student account.");
+    if (!unlinked.blocked) {
+      await enforceDirectReplyQuota(unlinked.chat_id);
+      const { send } = await bot();
+      await send(unlinked.chat_id, "🚪 IT Admin signed you out of the bot. Send your Student ID to sign in again.", { remove_keyboard: true }, "reply");
+    }
     return { ok: true };
   });

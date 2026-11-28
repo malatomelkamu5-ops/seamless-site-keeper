@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { teacherStream, canTakeStream, teacherCredentialKey, RESULT_PIN, hashResultPin, uploadSubjects, generateStaffPasscode, teacherBankRemovalError } from "@/lib/admin-rules";
+import { teacherStream, canTakeStream, teacherCredentialKey, RESULT_PIN, hashResultPin, uploadSubjects, generateStaffPasscode, teacherBankRemovalError, normalizeTeacherLookup } from "@/lib/admin-rules";
 import { canStartExam, personalDeadline, readmitDeadline, remainingSeconds, DISCONNECT_GRACE_SEC, admittedToRoom, activeBankIds, HELP_COOLDOWN_SEC, helpMessage, shouldTouchSession, mergeAnswers } from "@/lib/exam-timing";
 import { normalizeName, requirePasscode, shouldBlock, shuffle, subjectsFor } from "@/lib/identity";
 import { FIGURE_PATH, MAX_GIVEN, MAX_OPTION, MAX_PASSAGE, MAX_TEXT, MAX_PAPER_PAGES, groupByPassage, bankSaveProblem } from "@/lib/paper";
@@ -304,21 +304,26 @@ export const directorReadmit = createServerFn({ method: "POST" })
 
 /* ---------------- Teacher ---------------- */
 export async function teacher(passcode: string, teacherId: string) {
-  requirePasscode(passcode, await staffPasscode("teacher", teacherId), "Teacher");
+  const lookup = normalizeTeacherLookup(teacherId);
+  if (!lookup.value) throw new Error("Incorrect Teacher ID or password.");
   const sb = await admin();
-  const { data } = await sb.from("school_roster").select("id,full_name,subjects,stream").eq("id", teacherId).eq("kind", "teacher").maybeSingle();
-  if (!data) throw new Error("Teacher not found.");
-  return { ...data, subjects: uploadSubjects(data.subjects) };
+  let row: { id: string; full_name: string; subjects: string[]; stream: string } | null = null;
+  if (lookup.kind === "id") {
+    const { data } = await sb.from("school_roster").select("id,full_name,subjects,stream").eq("id", lookup.value).eq("kind", "teacher").maybeSingle();
+    row = data;
+  } else {
+    const { data } = await sb.from("school_roster").select("id,full_name,subjects,stream").eq("kind", "teacher");
+    const matches = (data ?? []).filter((t) => normalizeName(t.full_name) === lookup.value);
+    if (matches.length === 1) row = matches[0]!;
+  }
+  const expected = await staffPasscode("teacher", row?.id);
+  if (!expected) throw new Error("Teacher password is not set up yet.");
+  if (!row || passcode !== expected) throw new Error("Incorrect Teacher ID or password.");
+  return { ...row, subjects: uploadSubjects(row.subjects) };
 }
 
-export const listTeachers = createServerFn({ method: "GET" }).handler(async () => {
-  const sb = await admin();
-  const { data } = await sb.from("school_roster").select("id,full_name,stream,subjects").eq("kind", "teacher").order("id");
-  return (data ?? []).map((t) => ({ ...t, subjects: uploadSubjects(t.subjects) }));
-});
-
 export const teacherDashboard = createServerFn({ method: "POST" })
-  .inputValidator((d: unknown) => z.object({ passcode: pass, teacherId: z.string().max(30) }).parse(d))
+  .inputValidator((d: unknown) => z.object({ passcode: pass, teacherId: z.string().trim().min(1).max(100) }).parse(d))
   .handler(async ({ data }) => {
     const t = await teacher(data.passcode, data.teacherId);
     const sb = await admin();

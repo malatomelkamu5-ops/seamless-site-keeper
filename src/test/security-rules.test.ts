@@ -10,8 +10,20 @@ import {
   teacherBankRemovalError,
   signPinGuard,
   verifyPinGuard,
+  normalizeTeacherLookup,
 } from "@/lib/admin-rules";
-import { isVerifiedTelegramLink, normalizeStudentCode, STUDENT_CODE_PATTERN } from "@/lib/telegram-bot";
+import {
+  isVerifiedTelegramLink,
+  normalizeStudentCode,
+  STUDENT_CODE_PATTERN,
+  broadcastQuotaError,
+  directReplyQuotaError,
+  BROADCAST_COOLDOWN_MS,
+  BROADCAST_HOURLY_LIMIT,
+  BROADCAST_DAILY_LIMIT,
+  REPLY_PER_CHAT_LIMIT,
+  REPLY_SCHOOL_HOURLY_LIMIT,
+} from "@/lib/telegram-bot";
 
 describe("registration access code protection", () => {
   it("generates an 8-character formatted code without ambiguous characters", () => {
@@ -89,5 +101,48 @@ describe("verified Telegram student link", () => {
     expect(normalizeStudentCode(" bh-12a-01 ")).toBe("BH-12A-01");
     expect(STUDENT_CODE_PATTERN.test(normalizeStudentCode("bh-12a-01"))).toBe(true);
     expect(STUDENT_CODE_PATTERN.test(normalizeStudentCode("Abebe Bikila!"))).toBe(false);
+  });
+});
+
+describe("teacher sign-in lookup without public directory", () => {
+  it("parses Teacher IDs case-insensitively and normalizes full names", () => {
+    expect(normalizeTeacherLookup(" t-soc-05 ")).toEqual({ kind: "id", value: "T-SOC-05" });
+    expect(normalizeTeacherLookup("t-nat-04")).toEqual({ kind: "id", value: "T-NAT-04" });
+    expect(normalizeTeacherLookup("  Girmaa   Gaaddisaa Korsaa ")).toEqual({ kind: "name", value: "girmaa gaaddisaa korsaa" });
+  });
+});
+
+describe("Telegram admin outbound message quotas", () => {
+  const now = Date.parse("2026-11-28T15:00:00.000Z");
+
+  it("enforces cooldown, duplicate guard, hourly cap and daily cap on broadcasts", () => {
+    expect(broadcastQuotaError([], "all", "Exam starts at 9:00", now)).toBeNull();
+    const tooSoon = [{ created_at: new Date(now - BROADCAST_COOLDOWN_MS + 5_000).toISOString(), audience: "all", message: "Other" }];
+    expect(broadcastQuotaError(tooSoon, "all", "Exam starts at 9:00", now)).toMatch(/wait 1 minute/i);
+
+    const duplicate = [{ created_at: new Date(now - 3 * 60_000).toISOString(), audience: "all", message: "Exam starts at 9:00" }];
+    expect(broadcastQuotaError(duplicate, "all", "Exam starts at 9:00", now)).toMatch(/already sent/i);
+    expect(broadcastQuotaError(duplicate, "Natural Science", "Exam starts at 9:00", now)).toBeNull();
+
+    const hourly = Array.from({ length: BROADCAST_HOURLY_LIMIT }, (_, i) => ({
+      created_at: new Date(now - (i + 2) * 5 * 60_000).toISOString(),
+      audience: "all",
+      message: `Notice ${i}`,
+    }));
+    expect(broadcastQuotaError(hourly, "all", "Fresh notice", now)).toMatch(/Hourly announcement limit/);
+
+    const daily = Array.from({ length: BROADCAST_DAILY_LIMIT }, (_, i) => ({
+      created_at: new Date(now - (i + 2) * 3_600_000).toISOString(),
+      audience: "all",
+      message: `Notice ${i}`,
+    }));
+    expect(broadcastQuotaError(daily, "all", "Fresh notice", now)).toMatch(/Daily announcement limit/);
+  });
+
+  it("enforces per-chat and school-wide hourly limits on direct admin messages", () => {
+    expect(directReplyQuotaError(0, 0)).toBeNull();
+    expect(directReplyQuotaError(REPLY_PER_CHAT_LIMIT - 1, REPLY_SCHOOL_HOURLY_LIMIT - 1)).toBeNull();
+    expect(directReplyQuotaError(REPLY_PER_CHAT_LIMIT, 5)).toMatch(/Too many messages sent to this chat/);
+    expect(directReplyQuotaError(0, REPLY_SCHOOL_HOURLY_LIMIT)).toMatch(/Hourly Telegram reply limit/);
   });
 });
