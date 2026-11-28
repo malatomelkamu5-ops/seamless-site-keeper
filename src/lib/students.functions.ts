@@ -4,9 +4,10 @@ import { normalizeName, requireRosterName, requireAdminPin } from "@/lib/identit
 import type { TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 export { normalizeName } from "@/lib/identity";
 
-import { canReplaceFace, teacherRowSchema, teacherDetailsSchema, studentDetailsSchema, academicYear, sessionBlocksSignIn, teacherCredentialKey, RESULT_PIN, hashResultPin, pinLocked, afterWrongPin, generateRegistrationCode, matchesRegistrationCode, FACE_CHECK_STUDENT_WINDOW_MS, FACE_CHECK_SCHOOL_WINDOW_MS, faceCheckQuotaError } from "@/lib/admin-rules";
+import { canReplaceFace, teacherRowSchema, teacherDetailsSchema, studentDetailsSchema, academicYear, sessionBlocksSignIn, teacherCredentialKey, RESULT_PIN, hashResultPin, pinLocked, afterWrongPin, signPinGuard, verifyPinGuard, generateRegistrationCode, matchesRegistrationCode, FACE_CHECK_STUDENT_WINDOW_MS, FACE_CHECK_SCHOOL_WINDOW_MS, faceCheckQuotaError } from "@/lib/admin-rules";
 
 const BUCKET = "student-photos";
+const PIN_GUARD_COOKIE = "bh_pin_guard";
 
 async function admin() {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -142,21 +143,34 @@ export const loginStudent = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ id: z.string().trim().min(3).max(30), pin: z.string().trim().max(10).optional(), token: z.string().uuid().optional() }).parse(d))
   .handler(async ({ data }) => {
     const sb = await admin();
+    const { getCookie, setCookie, deleteCookie, getRequestUrl } = await import("@tanstack/react-start/server");
+    const guardSecret = process.env["SUPABASE_SERVICE_ROLE_KEY"] ?? process.env["IT_ADMIN_PASSCODE"] ?? "bh-pin-guard";
+    const secureCookie = getRequestUrl().protocol === "https:";
+    const guard = await verifyPinGuard(getCookie(PIN_GUARD_COOKIE), guardSecret);
+    const recordCallerFailure = async () => {
+      const next = afterWrongPin(guard.pin_failures);
+      setCookie(PIN_GUARD_COOKIE, await signPinGuard(next, guardSecret), { httpOnly: true, sameSite: "lax", secure: secureCookie, path: "/", maxAge: 15 * 60 });
+    };
+
     const { data: row } = await sb.from("registered_students").select("*").eq("student_code", data.id.toUpperCase()).maybeSingle();
     const wrong = { ok: false as const, error: "Student ID or passcode is wrong." };
-    if (!row) return wrong;
+    const sameDevice = !!row && !!data.token && data.token === row.session_token;
     // Students sign in with their ID + the passcode they chose at registration; a reload on the same device reuses its session token.
-    const sameDevice = !!data.token && data.token === row.session_token;
     if (!sameDevice) {
       if (!data.pin) return { ok: false as const, error: "Please sign in again with your student ID and passcode." };
-      if (pinLocked(row.pin_locked_until)) return { ok: false as const, error: "Too many wrong passcodes. Please wait 15 minutes and try again, or ask IT Admin." };
-      if (!row.results_pin_hash) return { ok: false as const, error: "No passcode is set for this ID. Please ask IT Admin to set one." };
-      if ((await hashResultPin(row.student_code, data.pin)) !== row.results_pin_hash) {
-        await sb.from("registered_students").update(afterWrongPin(row.pin_failures ?? 0)).eq("id", row.id);
+      if (pinLocked(guard.pin_locked_until)) return { ok: false as const, error: "Too many wrong passcodes. Please wait 15 minutes and try again, or ask IT Admin." };
+      if (!row) {
+        await recordCallerFailure();
         return wrong;
       }
-      if (row.pin_failures || row.pin_locked_until) await sb.from("registered_students").update({ pin_failures: 0, pin_locked_until: null }).eq("id", row.id);
+      if (!row.results_pin_hash) return { ok: false as const, error: "No passcode is set for this ID. Please ask IT Admin to set one." };
+      if ((await hashResultPin(row.student_code, data.pin)) !== row.results_pin_hash) {
+        await recordCallerFailure();
+        return wrong;
+      }
+      if (guard.pin_failures || guard.pin_locked_until) deleteCookie(PIN_GUARD_COOKIE, { path: "/" });
     }
+    if (!row) return wrong;
     if (!row.face_verified) return { ok: false as const, error: "IT Admin reset your face verification. Please register again with a fresh photo." };
     if (!sameDevice) {
       const { data: st } = await sb.from("exam_settings").select("exam_live,current_round").eq("id", 1).single();
@@ -404,7 +418,7 @@ export const adminDeletePerson = createServerFn({ method: "POST" })
         const { error } = await sb.from(table).delete().eq("student_code", data.id);
         if (error) throw new Error("Could not remove this student's exam records.");
       }
-      await sb.from("telegram_users").update({ student_code: null, id_confirmed: false, state: "await_name" }).eq("student_code", data.id);
+      await sb.from("telegram_users").update({ student_code: null, id_confirmed: false, state: "await_login_id", state_data: {} }).eq("student_code", data.id);
       const { error } = await sb.from("registered_students").delete().eq("student_code", data.id);
       if (error) throw new Error("Could not remove this student's registration.");
       if (reg?.photo_path) await sb.storage.from(BUCKET).remove([reg.photo_path, thumbPath(reg.photo_path)]);

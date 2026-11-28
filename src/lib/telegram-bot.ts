@@ -11,6 +11,11 @@ export const MENU = {
   signOut: "🚪 Sign out",
   cancel: "⬅️ Back to menu",
 } as const;
+export const CHANGE_ID_BUTTON = "⬅️ Change ID";
+export const STUDENT_CODE_PATTERN = /^[A-Z0-9-]{3,30}$/;
+export const normalizeStudentCode = (input: string) => input.trim().toUpperCase().replace(/\s+/g, "");
+/** A Telegram chat is linked to a student only after proving their ID and result passcode. */
+export const isVerifiedTelegramLink = (u: { student_code: string | null; id_confirmed: boolean }) => !!u.student_code && u.id_confirmed;
 
 /** Wrong result passcodes allowed before the bot pauses result checks for that chat. */
 export const PIN_MAX_FAILURES = 3;

@@ -1,6 +1,6 @@
-import { normalizeName, subjectsFor } from "@/lib/identity";
+import { subjectsFor } from "@/lib/identity";
 import { RESULT_PIN, hashResultPin } from "@/lib/admin-rules";
-import { MENU, afterWrongPin, pinLockMinutesLeft, statusLines, resultText, escapeHtml, inAudience, PORTAL_SITE, appDownloadUrl, iosAppUrl, appInstallMessage, examLiveMessage, type Audience } from "@/lib/telegram-bot";
+import { MENU, CHANGE_ID_BUTTON, STUDENT_CODE_PATTERN, normalizeStudentCode, isVerifiedTelegramLink, afterWrongPin, pinLockMinutesLeft, statusLines, resultText, escapeHtml, inAudience, PORTAL_SITE, appDownloadUrl, iosAppUrl, appInstallMessage, examLiveMessage, type Audience } from "@/lib/telegram-bot";
 import type { Tables } from "@/integrations/supabase/types";
 
 const GATEWAY_URL = "https://connector-gateway.lovable.dev/telegram";
@@ -83,6 +83,7 @@ const menuKeyboard = (s: BotSettings) => ({
   resize_keyboard: true, is_persistent: true,
 });
 const backKeyboard = { keyboard: [[{ text: MENU.cancel }]], resize_keyboard: true };
+const changeIdKeyboard = { keyboard: [[{ text: CHANGE_ID_BUTTON }]], resize_keyboard: true };
 const noKeyboard = { remove_keyboard: true };
 
 /** Sends a message, records it, and marks chats that blocked the bot. Returns false when it could not be delivered. */
@@ -116,47 +117,70 @@ async function setUser(chatId: number, patch: Partial<BotUser>) {
   await sb.from("telegram_users").update(patch).eq("chat_id", chatId);
 }
 
-async function linkedStudent(code: string | null) {
-  if (!code) return null;
+async function linkedStudent(user: Pick<BotUser, "student_code" | "id_confirmed">) {
+  if (!isVerifiedTelegramLink(user)) return null;
   const sb = await admin();
-  const { data } = await sb.from("registered_students").select("*").eq("student_code", code).maybeSingle();
+  const { data } = await sb.from("registered_students").select("*").eq("student_code", user.student_code!).maybeSingle();
   return data && data.face_verified ? data : null;
 }
 
 /* ---------------- Conversation ---------------- */
 
-async function askName(chatId: number, s: BotSettings, first: boolean) {
+async function askLoginId(chatId: number, s: BotSettings, first: boolean) {
   const st = await portalStatus();
   const intro = first ? `👋 <b>${escapeHtml(s.welcome_message)}</b>\n\n${statusOf(st)}\n\n` : "";
-  await send(chatId, `${intro}Please type your <b>full name</b> exactly as it is in the school list.`, noKeyboard);
+  await send(chatId, `${intro}To sign in, please send your <b>Student ID</b> (for example <code>BH-12A-01</code>).`, noKeyboard);
 }
 
 async function showMenu(chatId: number, s: BotSettings, text = "Choose from the menu below.") {
   await send(chatId, text, menuKeyboard(s));
 }
 
-async function handleName(user: BotUser, s: BotSettings, name: string) {
-  const sb = await admin();
-  await setUser(user.chat_id, { entered_name: name.slice(0, 100) });
-  const { data: regs } = await sb.from("registered_students").select("student_code,full_name,grade,section,stream,face_verified");
-  const matches = (regs ?? []).filter((r) => normalizeName(r.full_name) === normalizeName(name));
-  const verified = matches.filter((r) => r.face_verified);
-  if (verified.length === 1) {
-    const r = verified[0]!;
-    await setUser(user.chat_id, { student_code: r.student_code, linked_at: new Date().toISOString(), state: "menu", id_confirmed: false, pin_failures: 0, state_data: {} });
-    return showMenu(user.chat_id, s, `✅ <b>You are registered!</b>\n${escapeHtml(r.full_name)} · Grade ${escapeHtml(r.grade + r.section)} · ${escapeHtml(r.stream)}\n\nUse the menu buttons below.`);
+async function handleLoginId(user: BotUser, _s: BotSettings, text: string) {
+  const wait = pinLockMinutesLeft(user.pin_locked_until);
+  if (wait) return send(user.chat_id, `⏳ Too many wrong passcodes. Please try again in ${wait} minute${wait === 1 ? "" : "s"}.`, noKeyboard);
+  const code = normalizeStudentCode(text);
+  if (!STUDENT_CODE_PATTERN.test(code)) {
+    return send(user.chat_id, "Please send your <b>Student ID</b> (for example <code>BH-12A-01</code>), not your name.", noKeyboard);
   }
-  if (verified.length > 1) return send(user.chat_id, "More than one registered student has this name. Please contact IT Admin to confirm your record.", noKeyboard);
-  const st = await portalStatus();
-  const open = st.s.registration_open;
-  const how = open
-    ? "📝 Registration is <b>OPEN</b>. Tap the button below to register on the portal, then come back and send your name again."
-    : "🔒 Registration is <b>CLOSED</b> right now. Please wait until IT Admin opens it — we will tell you here.";
-  if (matches.length) return send(user.chat_id, `⚠️ Your registration was reset by IT Admin. You need to register again with a fresh photo.\n\n${how}`, portalButton(s, "📝 Register on the portal"));
-  const { data: roster } = await sb.from("school_roster").select("full_name").eq("kind", "student");
-  const inList = (roster ?? []).some((r) => normalizeName(r.full_name) === normalizeName(name));
-  const head = inList ? "❌ <b>You are not registered yet.</b>" : "❌ <b>You are not registered.</b> We could not find this name. Check the spelling and try again.";
-  await send(user.chat_id, `${head}\n\n${how}`, portalButton(s, "📝 Register on the portal"));
+  await setUser(user.chat_id, { state: "await_login_pin", state_data: { pending_code: code } });
+  return send(user.chat_id, "🔐 Now send your <b>result passcode</b> (4 to 6 numbers) to verify your identity. Your message will be deleted for privacy.", changeIdKeyboard);
+}
+
+async function handleLoginPin(user: BotUser, s: BotSettings, text: string, messageId: number) {
+  await tg("deleteMessage", { chat_id: user.chat_id, message_id: messageId }).catch(() => undefined);
+  const wait = pinLockMinutesLeft(user.pin_locked_until);
+  if (wait) {
+    await setUser(user.chat_id, { state: "await_login_id", state_data: {} });
+    return send(user.chat_id, `⏳ Too many wrong passcodes. Please try again in ${wait} minute${wait === 1 ? "" : "s"}.`, noKeyboard);
+  }
+  const raw = user.state_data && typeof user.state_data === "object" && !Array.isArray(user.state_data) ? (user.state_data as Record<string, unknown>)["pending_code"] : null;
+  const pendingCode = typeof raw === "string" ? normalizeStudentCode(raw) : "";
+  if (!STUDENT_CODE_PATTERN.test(pendingCode)) {
+    await setUser(user.chat_id, { state: "await_login_id", state_data: {} });
+    return askLoginId(user.chat_id, s, false);
+  }
+  const pin = text.trim();
+  if (!RESULT_PIN.test(pin)) return send(user.chat_id, "The passcode must be 4 to 6 numbers. Please send it again.", changeIdKeyboard);
+  const sb = await admin();
+  const { data: st } = await sb.from("registered_students").select("*").eq("student_code", pendingCode).maybeSingle();
+  const valid = !!st && st.face_verified && !!st.results_pin_hash && (await hashResultPin(st.student_code, pin)) === st.results_pin_hash;
+  if (!valid) {
+    const r = afterWrongPin(user.pin_failures);
+    await setUser(user.chat_id, { pin_failures: r.failures, pin_locked_until: r.lockedUntil, state: "await_login_id", state_data: {} });
+    if (!r.left) return send(user.chat_id, "⛔ Too many wrong passcodes. Sign-in is paused for 15 minutes. If you forgot your passcode, ask IT Admin to reset it.", noKeyboard);
+    return send(user.chat_id, `❌ Student ID or passcode is wrong. ${r.left} tr${r.left === 1 ? "y" : "ies"} left.\n\nPlease send your <b>Student ID</b> again (for example <code>BH-12A-01</code>).`, noKeyboard);
+  }
+  await setUser(user.chat_id, {
+    student_code: st.student_code,
+    linked_at: new Date().toISOString(),
+    state: "menu",
+    id_confirmed: true,
+    pin_failures: 0,
+    pin_locked_until: null,
+    state_data: {},
+  });
+  return showMenu(user.chat_id, s, `✅ <b>Signed in!</b>\n${escapeHtml(st.full_name)} · Grade ${escapeHtml(st.grade + st.section)} · ${escapeHtml(st.stream)}\n\nUse the menu buttons below.`);
 }
 
 async function scoresFor(st: Tables<"registered_students">, sat: boolean, currentRound: number) {
@@ -192,8 +216,8 @@ async function handleResultPin(user: BotUser, s: BotSettings, text: string, mess
   await tg("deleteMessage", { chat_id: user.chat_id, message_id: messageId }).catch(() => undefined);
   const pin = text.trim();
   if (!RESULT_PIN.test(pin)) return send(user.chat_id, "The passcode must be 4 to 6 numbers. Please send it again.", backKeyboard);
-  const st = await linkedStudent(user.student_code);
-  if (!st) { await setUser(user.chat_id, { state: "await_name", student_code: null }); return askName(user.chat_id, s, false); }
+  const st = await linkedStudent(user);
+  if (!st) { await setUser(user.chat_id, { state: "await_login_id", student_code: null, id_confirmed: false, state_data: {} }); return askLoginId(user.chat_id, s, false); }
   const status = await portalStatus();
   if (!status.s.results_published) { await setUser(user.chat_id, { state: "menu" }); return showMenu(user.chat_id, s, "🔒 Results are <b>CLOSED</b> right now."); }
   if (!st.results_pin_hash) { await setUser(user.chat_id, { state: "menu" }); return send(user.chat_id, "You have not created a result passcode yet. Open the Results page on the portal once to create it.", portalButton(s, "📊 Create passcode on the portal")); }
@@ -209,13 +233,13 @@ async function handleResultPin(user: BotUser, s: BotSettings, text: string, mess
 }
 
 async function showProfile(user: BotUser, s: BotSettings) {
-  const st = await linkedStudent(user.student_code);
-  if (!st) { await setUser(user.chat_id, { state: "await_name", student_code: null }); return askName(user.chat_id, s, false); }
+  const st = await linkedStudent(user);
+  if (!st) { await setUser(user.chat_id, { state: "await_login_id", student_code: null, id_confirmed: false, state_data: {} }); return askLoginId(user.chat_id, s, false); }
   const date = new Date(st.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Africa/Addis_Ababa" });
   await showMenu(user.chat_id, s, [
     "👤 <b>Your profile</b>",
     `Name: <b>${escapeHtml(st.full_name)}</b>`,
-    `Student ID: ${user.id_confirmed ? `<b>${escapeHtml(st.student_code)}</b>` : "<i>hidden — confirm it once in My Result</i>"}`,
+    `Student ID: <b>${escapeHtml(st.student_code)}</b>`,
     `Class: Grade ${escapeHtml(st.grade + st.section)}`,
     `Stream: ${escapeHtml(st.stream)}`,
     `Gender: ${st.gender === "F" ? "Female" : "Male"}`,
@@ -244,7 +268,9 @@ export async function handleUpdate(update: TgUpdate) {
   const chatId = msg.chat.id;
   const text = (msg.text ?? "").trim();
   const { data: existing } = await sb.from("telegram_users").select("*").eq("chat_id", chatId).maybeSingle();
-  const logged = existing?.state === "await_result_pin" && text && !text.startsWith("/") && !Object.values(MENU).includes(text as never) ? "•••• (result passcode hidden)" : text || "[non-text message]";
+  const isPinPrompt = existing?.state === "await_result_pin" || existing?.state === "await_login_pin";
+  const isControlText = !text || text.startsWith("/") || text === CHANGE_ID_BUTTON || Object.values(MENU).includes(text as never);
+  const logged = isPinPrompt && !isControlText ? "•••• (passcode hidden)" : text || "[non-text message]";
   const { error: dup } = await sb.from("telegram_messages").insert({ update_id: update.update_id, chat_id: chatId, direction: "in", kind: existing?.state === "await_help" && text && !text.startsWith("/") && !Object.values(MENU).includes(text as never) ? "help" : "chat", text: logged.slice(0, 4000) });
   if (dup) return; // already handled
   const profile = { telegram_user_id: msg.from?.id ?? null, username: msg.from?.username ?? null, first_name: msg.from?.first_name ?? null, last_name: msg.from?.last_name ?? null, language_code: msg.from?.language_code ?? null, last_seen_at: new Date().toISOString(), blocked: false };
@@ -254,18 +280,31 @@ export async function handleUpdate(update: TgUpdate) {
   await notifyStatusChanges().catch((e) => console.error("Status notice failed", e));
   if (!s.bot_enabled) return send(chatId, "⏸ The bot is paused by IT Admin right now. Please use the exam portal.", portalButton(s));
 
+  const linked = await linkedStudent(user);
+  const command = text.toLowerCase();
   if (text.startsWith("/start") || !existing) {
-    await setUser(chatId, { state: "await_name", state_data: {} });
-    return askName(chatId, s, true);
+    if (linked) {
+      await setUser(chatId, { state: "menu", state_data: {} });
+      return showMenu(chatId, s, `👋 <b>${escapeHtml(s.welcome_message)}</b>\n\nSigned in as <b>${escapeHtml(linked.full_name)}</b>.`);
+    }
+    await setUser(chatId, { student_code: null, id_confirmed: false, state: "await_login_id", state_data: {} });
+    return askLoginId(chatId, s, true);
   }
   if (!text) return send(chatId, "Please send text messages only.");
-  const linked = await linkedStudent(user.student_code);
   if (!linked) {
-    if (user.student_code) await setUser(chatId, { student_code: null, id_confirmed: false });
-    if (text.startsWith("/")) return askName(chatId, s, false);
-    return handleName(user, s, text);
+    if (user.student_code || user.id_confirmed) await setUser(chatId, { student_code: null, id_confirmed: false });
+    if (command === "/app" || text === MENU.app) return send(chatId, appInstallMessage(), appButtons(s));
+    if (command === "/status") {
+      const st = await portalStatus();
+      return send(chatId, `📅 <b>Exam portal status</b>\n\n${statusOf(st)}`, noKeyboard);
+    }
+    if (text === CHANGE_ID_BUTTON || text === MENU.cancel || text.startsWith("/")) {
+      await setUser(chatId, { state: "await_login_id", state_data: {} });
+      return askLoginId(chatId, s, false);
+    }
+    if (user.state === "await_login_pin") return handleLoginPin(user, s, text, msg.message_id);
+    return handleLoginId(user, s, text);
   }
-  const command = text.toLowerCase();
   if (text === MENU.cancel || command === "/menu") { await setUser(chatId, { state: "menu" }); return showMenu(chatId, s); }
   if (text === MENU.result || command === "/result") return startResult(user, s);
   if (text === MENU.profile || command === "/profile") { await setUser(chatId, { state: "menu" }); return showProfile(user, s); }
@@ -283,8 +322,8 @@ export async function handleUpdate(update: TgUpdate) {
     return send(chatId, `🆘 ${escapeHtml(s.help_message)}\n\n✍️ Type your question now and send it. IT Admin will reply to you here.`, backKeyboard);
   }
   if (text === MENU.signOut) {
-    await setUser(chatId, { student_code: null, id_confirmed: false, state: "await_name", linked_at: null });
-    return send(chatId, "🚪 You are signed out. Send your full name to sign in again.", noKeyboard);
+    await setUser(chatId, { student_code: null, id_confirmed: false, state: "await_login_id", linked_at: null, state_data: {} });
+    return send(chatId, "🚪 You are signed out. Send your Student ID to sign in again.", noKeyboard);
   }
   if (user.state === "await_result_id") return handleResultId(user, s, text);
   if (user.state === "await_result_pin") return handleResultPin(user, s, text, msg.message_id);
@@ -300,11 +339,15 @@ export async function handleUpdate(update: TgUpdate) {
 /** Sends one message to every chat in the audience, about 20 per second to stay inside Telegram's limits. */
 export async function broadcast(audience: Audience, text: string, markup: unknown, kind: "manual" | "auto", record: string) {
   const sb = await admin();
-  const { data: users } = await sb.from("telegram_users").select("chat_id,blocked,student_code");
-  const codes = [...new Set((users ?? []).map((u) => u.student_code).filter((c): c is string => !!c))];
+  const { data: users } = await sb.from("telegram_users").select("chat_id,blocked,student_code,id_confirmed");
+  const verifiedCode = (u: { student_code: string | null; id_confirmed: boolean }) => (isVerifiedTelegramLink(u) ? u.student_code : null);
+  const codes = [...new Set((users ?? []).map(verifiedCode).filter((c): c is string => !!c))];
   const { data: regs } = codes.length ? await sb.from("registered_students").select("student_code,stream").in("student_code", codes) : { data: [] };
   const stream = new Map((regs ?? []).map((r) => [r.student_code, r.stream]));
-  const targets = (users ?? []).filter((u) => inAudience(audience, { ...u, stream: u.student_code ? stream.get(u.student_code) ?? null : null }));
+  const targets = (users ?? []).filter((u) => {
+    const code = verifiedCode(u);
+    return inAudience(audience, { blocked: u.blocked, student_code: code, stream: code ? stream.get(code) ?? null : null });
+  });
   let sent = 0, failed = 0;
   for (let i = 0; i < targets.length; i += 20) {
     const results = await Promise.all(targets.slice(i, i + 20).map((u) => send(u.chat_id, text, markup, kind === "manual" ? "broadcast" : "notice")));
@@ -346,7 +389,7 @@ export async function notifyStatusChanges() {
       await broadcast("registered", "📊 <b>Results are published!</b>\nTap <b>My Result</b> in the menu and enter your ID and passcode to see your marks.", menuKeyboard(ts), "auto", "Results published");
     }
     if (flag === "registration_open" && ts.notify_registration) {
-      await broadcast("unregistered", "📝 <b>Registration is OPEN now!</b>\nTap below to register on the portal, then send your full name here.", portalButton(ts, "📝 Register on the portal"), "auto", "Registration opened");
+      await broadcast("unregistered", "📝 <b>Registration is OPEN now!</b>\nTap below to register on the portal, then send your Student ID and passcode here to sign in.", portalButton(ts, "📝 Register on the portal"), "auto", "Registration opened");
     }
   }
 }

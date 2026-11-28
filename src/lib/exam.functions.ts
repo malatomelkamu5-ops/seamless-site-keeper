@@ -21,17 +21,9 @@ const questionSchema = z.object({
   figure: z.string().regex(FIGURE_PATH).optional(),
 });
 const FIGURE_BUCKET = "question-figures";
-/** Short-lived links to question pictures in private storage for active student exams. */
+/** Streams private question pictures directly as data URLs after verifying access so no signed link outlives revocation. */
 export async function figureLinks(paths: (string | undefined)[]) {
   const unique = [...new Set(paths.filter((p): p is string => !!p))];
-  if (!unique.length) return {} as Record<string, string>;
-  const sb = await admin();
-  const { data } = await sb.storage.from(FIGURE_BUCKET).createSignedUrls(unique, 3 * 3600);
-  return Object.fromEntries((data ?? []).filter((d) => d.signedUrl && d.path).map((d) => [d.path!, d.signedUrl]));
-}
-/** Streams private question figures directly after verifying the teacher so no signed storage link outlives revocation. */
-async function teacherFigureDataUrls(paths: string[]) {
-  const unique = [...new Set(paths.filter(Boolean))];
   if (!unique.length) return {} as Record<string, string>;
   const sb = await admin();
   const { bytesToDataUrl } = await import("@/lib/face-grid");
@@ -382,7 +374,7 @@ export const teacherFigureUrls = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, teacherId: z.string().max(30), paths: z.array(z.string().regex(FIGURE_PATH)).max(600) }).parse(d))
   .handler(async ({ data }) => {
     const t = await teacher(data.passcode, data.teacherId);
-    return teacherFigureDataUrls(data.paths.filter((p) => p.startsWith(`${t.id}/`)));
+    return figureLinks(data.paths.filter((p) => p.startsWith(`${t.id}/`)));
   });
 
 /* ---------------- Student exam ---------------- */

@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireAdminPin } from "@/lib/identity";
-import { AUDIENCES, webhookUrlFor, escapeHtml } from "@/lib/telegram-bot";
+import { AUDIENCES, webhookUrlFor, escapeHtml, isVerifiedTelegramLink } from "@/lib/telegram-bot";
 
 const pass = z.string().min(1).max(200);
 function checkPasscode(p: string) { requireAdminPin(p, process.env["IT_ADMIN_PASSCODE"]); }
@@ -44,7 +44,7 @@ export const adminBotDashboard = createServerFn({ method: "POST" })
       webhook = { url: w.url, pending: w.pending_update_count, lastError: w.last_error_message ?? null };
     } catch (e) { botError = e instanceof Error ? e.message : "Could not reach Telegram."; }
     const list = (users.data ?? []).map((u) => {
-      const st = u.student_code ? byCode.get(u.student_code) : undefined;
+      const st = isVerifiedTelegramLink(u) && u.student_code ? byCode.get(u.student_code) : undefined;
       return { ...u, student: st ? { name: st.full_name, id: st.student_code, grade: st.grade, section: st.section, stream: st.stream } : null };
     });
     return {
@@ -60,7 +60,10 @@ export const adminBotDashboard = createServerFn({ method: "POST" })
       },
       users: list,
       messages: (messages.data ?? []).map((m) => ({ ...m, who: label(m.chat_id) })),
-      help: (help.data ?? []).map((m) => ({ ...m, who: label(m.chat_id), student: people.get(m.chat_id)?.student_code ? byCode.get(people.get(m.chat_id)!.student_code!)?.full_name ?? null : null })),
+      help: (help.data ?? []).map((m) => {
+        const p = people.get(m.chat_id);
+        return { ...m, who: label(m.chat_id), student: p && isVerifiedTelegramLink(p) && p.student_code ? byCode.get(p.student_code)?.full_name ?? null : null };
+      }),
       broadcasts: broadcasts.data ?? [],
       settings: settings.data,
       bot: info, webhook, botError, expectedWebhook: webhookUrlFor(data.origin),
@@ -95,7 +98,7 @@ export const adminBotConnect = createServerFn({ method: "POST" })
     const url = webhookUrlFor(data.origin);
     await tg("setWebhook", { url, secret_token: await webhookSecret(), allowed_updates: ["message"], drop_pending_updates: false });
     await tg("setMyCommands", { commands: [
-      { command: "start", description: "Start and sign in with your name" },
+      { command: "start", description: "Start and sign in with your ID and passcode" },
       { command: "result", description: "My result" },
       { command: "profile", description: "My profile" },
       { command: "status", description: "Exam status" },
@@ -136,15 +139,15 @@ export const adminBotHelpDone = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-/** Signs a Telegram chat out of its student record; they must send their name again. */
+/** Signs a Telegram chat out of its student record; they must sign in with their ID and passcode again. */
 export const adminBotUnlink = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ passcode: pass, chatId: z.number().int() }).parse(d))
   .handler(async ({ data }) => {
     checkPasscode(data.passcode);
     const sb = await admin();
-    const { error } = await sb.from("telegram_users").update({ student_code: null, id_confirmed: false, state: "await_name", linked_at: null }).eq("chat_id", data.chatId);
+    const { error } = await sb.from("telegram_users").update({ student_code: null, id_confirmed: false, state: "await_login_id", linked_at: null, state_data: {} }).eq("chat_id", data.chatId);
     if (error) throw new Error("Could not sign this chat out.");
     const { send } = await bot();
-    await send(data.chatId, "🚪 IT Admin signed you out of the bot. Send your full name to sign in again.", { remove_keyboard: true });
+    await send(data.chatId, "🚪 IT Admin signed you out of the bot. Send your Student ID to sign in again.", { remove_keyboard: true });
     return { ok: true };
   });

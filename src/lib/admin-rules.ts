@@ -88,6 +88,39 @@ export function afterWrongPin(failures: number, time = Date.now()) {
   return n >= PIN_MAX_FAILURES ? { pin_failures: 0, pin_locked_until: new Date(time + PIN_LOCK_MS).toISOString() } : { pin_failures: n, pin_locked_until: null };
 }
 
+export type PinGuardState = { pin_failures: number; pin_locked_until: string | null };
+const EMPTY_PIN_GUARD: PinGuardState = { pin_failures: 0, pin_locked_until: null };
+
+async function pinGuardHmac(payload: string, secret: string) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`bh-pin-guard:${payload}`));
+  return Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Signs caller-scoped failed-PIN state so sign-in throttling never locks another student's account. */
+export async function signPinGuard(state: PinGuardState, secret: string) {
+  const payload = btoa(JSON.stringify({ f: state.pin_failures, u: state.pin_locked_until }));
+  return `${payload}.${await pinGuardHmac(payload, secret)}`;
+}
+
+/** Verifies and parses the caller-scoped failed-PIN cookie; invalid or tampered values reset safely. */
+export async function verifyPinGuard(cookie: string | undefined, secret: string): Promise<PinGuardState> {
+  if (!cookie) return EMPTY_PIN_GUARD;
+  const dot = cookie.lastIndexOf(".");
+  if (dot <= 0) return EMPTY_PIN_GUARD;
+  const payload = cookie.slice(0, dot);
+  const sig = cookie.slice(dot + 1);
+  if ((await pinGuardHmac(payload, secret)) !== sig) return EMPTY_PIN_GUARD;
+  try {
+    const parsed = JSON.parse(atob(payload)) as { f?: unknown; u?: unknown };
+    const f = typeof parsed.f === "number" && Number.isInteger(parsed.f) && parsed.f >= 0 ? parsed.f : 0;
+    const u = typeof parsed.u === "string" ? parsed.u : null;
+    return { pin_failures: f, pin_locked_until: u };
+  } catch {
+    return EMPTY_PIN_GUARD;
+  }
+}
+
 const REG_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 function randomCodeChars(length: number) {
   const bytes = new Uint8Array(length);
